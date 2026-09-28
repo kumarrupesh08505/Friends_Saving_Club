@@ -1646,13 +1646,16 @@ def transactions():
                 {{ t["note"] or "-" }}
             </p>
 
-            <a class="delete"
-               href="/delete_transaction/{{ t['id'] }}"
-               onclick="return confirm('Delete this transaction?')">
+        <a href="/edit_transaction/{{ t['id'] }}"
+   style="margin-right:10px;">
+    ✏️ Edit
+</a>
 
-                🗑 Delete
-
-            </a>
+<a class="delete"
+   href="/delete_transaction/{{ t['id'] }}"
+   onclick="return confirm('Delete this transaction?')">
+    🗑 Delete
+</a>
 
         </div>
 

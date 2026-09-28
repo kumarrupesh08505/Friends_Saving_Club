@@ -2990,7 +2990,7 @@ def change_password():
 init_db()
 
 
-if _name_ == "_main_":
+if __name__ == "__main__":
 
     print("")
     print("======================================")

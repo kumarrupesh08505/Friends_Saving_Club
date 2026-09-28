@@ -22,8 +22,10 @@ app.secret_key = "friend-saving-club-secret-2026"
 # =========================================================
 
 def get_db():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg.connect(
+        os.environ["DATABASE_URL"],
+        row_factory=dict_row
+    )
     return conn
 
 

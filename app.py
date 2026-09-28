@@ -1866,40 +1866,55 @@ def my_transactions():
     conn = get_db()
     cur = conn.cursor()
 
-    # सभी members की summary
+    # ==========================================
+    # MEMBER-WISE SUMMARY
+    # ==========================================
+
     cur.execute("""
         SELECT
             m.id,
             m.name,
-            COALESCE(SUM(
-                CASE
-                    WHEN t.transaction_type = 'jama'
-                    THEN t.amount
-                    ELSE 0
-                END
-            ), 0) AS total_jama,
 
-            COALESCE(SUM(
-                CASE
-                    WHEN t.transaction_type = 'payout'
-                    THEN t.amount
-                    ELSE 0
-                END
-            ), 0) AS total_payout
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN t.transaction_type = 'jama'
+                        THEN t.amount
+                        ELSE 0
+                    END
+                ), 0
+            ) AS total_jama,
+
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN t.transaction_type = 'payout'
+                        THEN t.amount
+                        ELSE 0
+                    END
+                ), 0
+            ) AS total_payout
 
         FROM fsc_members m
 
         LEFT JOIN fsc_transactions t
             ON m.id = t.member_id
 
-        GROUP BY m.id, m.name
+        GROUP BY
+            m.id,
+            m.name
 
-        ORDER BY m.name
+        ORDER BY
+            m.name
     """)
 
     members = cur.fetchall()
 
-    # सभी transactions
+
+    # ==========================================
+    # ALL TRANSACTIONS
+    # ==========================================
+
     cur.execute("""
         SELECT
             t.id,
@@ -1921,10 +1936,15 @@ def my_transactions():
 
     transactions = cur.fetchall()
 
+
+    # ==========================================
+    # OVERALL TOTAL
+    # ==========================================
+
     cur.close()
     conn.close()
 
-    # Overall totals
+
     total_jama = sum(
         float(m["total_jama"])
         for m in members
@@ -1937,13 +1957,28 @@ def my_transactions():
 
     balance = total_jama - total_payout
 
+    total_baaki = max(
+        total_jama - total_payout,
+        0
+    )
+
+    total_wapas = max(
+        total_payout - total_jama,
+        0
+    )
+
+
+    # ==========================================
+    # HTML
+    # ==========================================
+
     html = """
     <!DOCTYPE html>
     <html>
 
     <head>
 
-        <title>All Transactions</title>
+        <title>All Members Transactions</title>
 
         <meta name="viewport"
               content="width=device-width, initial-scale=1">
@@ -1962,9 +1997,13 @@ def my_transactions():
                 padding: 18px;
             }
 
+            header h2 {
+                margin: 0 0 8px 0;
+            }
+
             .container {
                 width: 94%;
-                max-width: 1000px;
+                max-width: 1100px;
                 margin: 20px auto;
             }
 
@@ -1983,6 +2022,14 @@ def my_transactions():
                 box-shadow: 0 2px 6px rgba(0,0,0,0.08);
             }
 
+            .summary .card {
+                padding: 18px;
+            }
+
+            .card h2 {
+                margin: 8px 0 0 0;
+            }
+
             .green {
                 color: #15803d;
             }
@@ -1997,6 +2044,10 @@ def my_transactions():
 
             .orange {
                 color: #ea580c;
+            }
+
+            .gray {
+                color: #475569;
             }
 
             table {
@@ -2021,11 +2072,25 @@ def my_transactions():
                 overflow-x: auto;
             }
 
+            @media(max-width:700px) {
+
+                table {
+                    font-size: 13px;
+                }
+
+                th, td {
+                    padding: 7px;
+                }
+
+            }
+
         </style>
 
     </head>
 
+
     <body>
+
 
     <header>
 
@@ -2035,7 +2100,7 @@ def my_transactions():
 
         <a href="/dashboard"
            style="color:white;">
-            Dashboard
+            🏠 Dashboard
         </a>
 
     </header>
@@ -2043,46 +2108,123 @@ def my_transactions():
 
     <div class="container">
 
+
+        <!-- ================================= -->
+        <!-- OVERALL TOTAL -->
+        <!-- ================================= -->
+
+        <h2>
+            📊 Overall Total / अब तक का पूरा हिसाब
+        </h2>
+
+
         <div class="summary">
 
+
             <div class="card green">
-                <b>Total Jama</b>
+
+                <b>
+                    📥 Total Jama
+                </b>
+
                 <h2>
                     ₹{{ "%.2f"|format(total_jama) }}
                 </h2>
+
             </div>
 
+
             <div class="card red">
-                <b>Total Payout</b>
+
+                <b>
+                    📤 Total Payout
+                </b>
+
                 <h2>
                     ₹{{ "%.2f"|format(total_payout) }}
                 </h2>
+
             </div>
 
+
             <div class="card blue">
-                <b>Balance</b>
+
+                <b>
+                    💰 Balance
+                </b>
+
                 <h2>
                     ₹{{ "%.2f"|format(balance) }}
                 </h2>
+
             </div>
+
+
+            <div class="card blue">
+
+                <b>
+                    📌 Total Baaki
+                </b>
+
+                <h2>
+                    ₹{{ "%.2f"|format(total_baaki) }}
+                </h2>
+
+            </div>
+
+
+            <div class="card orange">
+
+                <b>
+                    🔄 Total Wapas Karna Hai
+                </b>
+
+                <h2>
+                    ₹{{ "%.2f"|format(total_wapas) }}
+                </h2>
+
+            </div>
+
 
         </div>
 
 
-        <h2>📊 Member-wise Summary</h2>
+        <!-- ================================= -->
+        <!-- MEMBER-WISE SUMMARY -->
+        <!-- ================================= -->
+
+        <h2>
+            👥 Member-wise Summary
+        </h2>
 
 
         {% for m in members %}
 
-        {% set member_balance =
-            m["total_jama"]|float -
+
+        {% set member_jama =
+            m["total_jama"]|float
+        %}
+
+
+        {% set member_payout =
             m["total_payout"]|float
         %}
 
-        {% set return_amount =
-            m["total_payout"]|float -
-            m["total_jama"]|float
+
+        {% set member_balance =
+            member_jama - member_payout
         %}
+
+
+        {% set member_baaki =
+            member_jama - member_payout
+        %}
+
+
+        {% set member_wapas =
+            member_payout - member_jama
+        %}
+
 
         <div class="card">
 
@@ -2090,62 +2232,125 @@ def my_transactions():
                 👤 {{ m["name"] }}
             </h3>
 
+
             <p class="green">
+
                 📥 Total Jama:
+
                 <b>
-                    ₹{{ "%.2f"|format(m["total_jama"]|float) }}
+                    ₹{{ "%.2f"|format(member_jama) }}
                 </b>
+
             </p>
+
 
             <p class="red">
-                📤 Total Payout:
+
+                📤 Total Payout / Liya:
+
                 <b>
-                    ₹{{ "%.2f"|format(m["total_payout"]|float) }}
+                    ₹{{ "%.2f"|format(member_payout) }}
                 </b>
+
             </p>
 
+
             <p class="blue">
+
                 💰 Balance:
+
                 <b>
                     ₹{{ "%.2f"|format(member_balance) }}
                 </b>
+
             </p>
+
+
+            <p class="blue">
+
+                📌 Baaki:
+
+                <b>
+                    ₹{{ "%.2f"|format(
+                        member_baaki
+                        if member_baaki > 0
+                        else 0
+                    ) }}
+                </b>
+
+            </p>
+
 
             <p class="orange">
+
                 🔄 Wapas Karna Hai:
+
                 <b>
-                    ₹{{ "%.2f"|format(return_amount if return_amount > 0 else 0) }}
+                    ₹{{ "%.2f"|format(
+                        member_wapas
+                        if member_wapas > 0
+                        else 0
+                    ) }}
                 </b>
+
             </p>
 
+
         </div>
+
 
         {% endfor %}
 
 
-        <h2>📋 Complete Transaction History</h2>
+        <!-- ================================= -->
+        <!-- TRANSACTION HISTORY -->
+        <!-- ================================= -->
+
+        <h2>
+            📋 Complete Transaction History
+        </h2>
 
 
         <div class="table-container">
 
         <table>
 
+
             <tr>
-                <th>Member</th>
-                <th>Type</th>
-                <th>Amount</th>
-                <th>Date</th>
-                <th>Note</th>
+
+                <th>
+                    Member
+                </th>
+
+                <th>
+                    Type
+                </th>
+
+                <th>
+                    Amount
+                </th>
+
+                <th>
+                    Date
+                </th>
+
+                <th>
+                    Note
+                </th>
+
             </tr>
 
 
             {% for t in transactions %}
 
+
             <tr>
+
 
                 <td>
                     {{ t["member_name"] }}
                 </td>
+
 
                 <td>
 
@@ -2165,47 +2370,71 @@ def my_transactions():
 
                 </td>
 
+
                 <td>
                     ₹{{ "%.2f"|format(t["amount"]|float) }}
                 </td>
+
 
                 <td>
                     {{ t["transaction_date"] }}
                 </td>
 
+
                 <td>
                     {{ t["note"] or "-" }}
                 </td>
 
+
             </tr>
+
 
             {% else %}
 
+
             <tr>
+
                 <td colspan="5">
                     No transactions found.
                 </td>
+
             </tr>
 
+
             {% endfor %}
+
 
         </table>
 
         </div>
 
+
     </div>
 
     </body>
+
     </html>
     """
 
+
     return render_template_string(
+
         html,
+
         members=members,
+
         transactions=transactions,
+
         total_jama=total_jama,
+
         total_payout=total_payout,
-        balance=balance
+
+        balance=balance,
+
+        total_baaki=total_baaki,
+
+        total_wapas=total_wapas
+
     )
 
 # =========================================================

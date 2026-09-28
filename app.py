@@ -2986,9 +2986,11 @@ def change_password():
 # START APPLICATION
 # =========================================================
 
-if __name__ == "__main__":
+# Render / Gunicorn ke liye database initialize karo
+init_db()
 
-    init_db()
+
+if _name_ == "_main_":
 
     print("")
     print("======================================")

@@ -2223,13 +2223,67 @@ def report():
     from_date = request.form.get("from_date", "")
     to_date = request.form.get("to_date", "")
 
+    # ==========================================
+    # OVERALL TOTAL - AB TAK KA POORA HISAB
+    # ==========================================
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN transaction_type = 'jama'
+                        THEN amount
+                        ELSE 0
+                    END
+                ), 0
+            ) AS total_jama,
+
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN transaction_type = 'payout'
+                        THEN amount
+                        ELSE 0
+                    END
+                ), 0
+            ) AS total_payout
+
+        FROM fsc_transactions
+    """)
+
+    overall = cur.fetchone()
+
+    overall_jama = float(overall["total_jama"])
+    overall_payout = float(overall["total_payout"])
+
+    overall_balance = overall_jama - overall_payout
+
+    overall_wapas = max(
+        overall_payout - overall_jama,
+        0
+    )
+
+    cur.close()
+    conn.close()
+
+
+    # ==========================================
+    # DATE-WISE REPORT
+    # ==========================================
+
     report_data = []
 
     totals = {
         "jama": 0,
         "payout": 0,
-        "balance": 0
+        "balance": 0,
+        "wapas": 0
     }
+
 
     if from_date and to_date:
 
@@ -2248,8 +2302,7 @@ def report():
                             THEN t.amount
                             ELSE 0
                         END
-                    ),
-                    0
+                    ), 0
                 ) AS jama,
 
                 COALESCE(
@@ -2259,17 +2312,16 @@ def report():
                             THEN t.amount
                             ELSE 0
                         END
-                    ),
-                    0
+                    ), 0
                 ) AS payout
 
             FROM fsc_members m
 
             LEFT JOIN fsc_transactions t
-            ON m.id = t.member_id
+                ON m.id = t.member_id
 
-            AND t.transaction_date
-            BETWEEN %s AND %s
+                AND t.transaction_date
+                BETWEEN %s AND %s
 
             GROUP BY
                 m.id,
@@ -2291,7 +2343,10 @@ def report():
 
             balance = jama - payout
 
-            wapas = max(payout - jama, 0)
+            wapas = max(
+                payout - jama,
+                0
+            )
 
             report_data.append({
                 "name": row["name"],
@@ -2305,13 +2360,25 @@ def report():
             totals["payout"] += payout
 
         totals["balance"] = (
-            totals["jama"] -
+            totals["jama"]
+            -
             totals["payout"]
+        )
+
+        totals["wapas"] = max(
+            totals["payout"]
+            -
+            totals["jama"],
+            0
         )
 
         cur.close()
         conn.close()
 
+
+    # ==========================================
+    # HTML
+    # ==========================================
 
     html = """
     <!DOCTYPE html>
@@ -2319,7 +2386,7 @@ def report():
 
     <head>
 
-        <title>Date-wise Report</title>
+        <title>Friend Saving Club - Report</title>
 
         <meta name="viewport"
               content="width=device-width, initial-scale=1">
@@ -2338,6 +2405,10 @@ def report():
                 padding: 18px;
             }
 
+            header h2 {
+                margin: 0 0 8px 0;
+            }
+
             .container {
                 width: 94%;
                 max-width: 1100px;
@@ -2350,6 +2421,29 @@ def report():
                 border-radius: 12px;
                 margin-bottom: 15px;
                 box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+            }
+
+            .overall {
+                border-left: 5px solid #1e3a8a;
+            }
+
+            .summary {
+                display: grid;
+                grid-template-columns:
+                    repeat(auto-fit, minmax(190px, 1fr));
+                gap: 12px;
+            }
+
+            .summary-card {
+                background: white;
+                padding: 15px;
+                border-radius: 12px;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+            }
+
+            .summary-card h3 {
+                margin: 5px 0;
+                font-size: 25px;
             }
 
             input {
@@ -2366,6 +2460,11 @@ def report():
                 border: none;
                 border-radius: 8px;
                 cursor: pointer;
+                font-weight: bold;
+            }
+
+            button:hover {
+                background: #1d4ed8;
             }
 
             table {
@@ -2404,6 +2503,10 @@ def report():
                 overflow-x: auto;
             }
 
+            .period-title {
+                color: #1e3a8a;
+            }
+
             @media(max-width:700px) {
 
                 table {
@@ -2421,6 +2524,7 @@ def report():
 
                 button {
                     margin-top: 8px;
+                    width: 95%;
                 }
 
             }
@@ -2429,17 +2533,19 @@ def report():
 
     </head>
 
+
     <body>
+
 
     <header>
 
         <h2>
-            📊 Date-wise Report / तारीख अनुसार रिपोर्ट
+            📊 Friend Saving Club Report
         </h2>
 
         <a href="/dashboard"
            style="color:white;">
-            Dashboard
+            🏠 Dashboard
         </a>
 
     </header>
@@ -2448,16 +2554,91 @@ def report():
     <div class="container">
 
 
+        <!-- ================================= -->
+        <!-- OVERALL TOTAL -->
+        <!-- ================================= -->
+
+        <div class="card overall">
+
+            <h2>
+                📌 Overall Total / अब तक का पूरा हिसाब
+            </h2>
+
+            <div class="summary">
+
+
+                <div class="summary-card">
+
+                    <div class="green">
+                        📥 Total Jama
+                    </div>
+
+                    <h3 class="green">
+                        ₹{{ "%.2f"|format(overall_jama) }}
+                    </h3>
+
+                </div>
+
+
+                <div class="summary-card">
+
+                    <div class="red">
+                        📤 Total Payout
+                    </div>
+
+                    <h3 class="red">
+                        ₹{{ "%.2f"|format(overall_payout) }}
+                    </h3>
+
+                </div>
+
+
+                <div class="summary-card">
+
+                    <div class="blue">
+                        💰 Current Balance
+                    </div>
+
+                    <h3 class="blue">
+                        ₹{{ "%.2f"|format(overall_balance) }}
+                    </h3>
+
+                </div>
+
+
+                <div class="summary-card">
+
+                    <div class="orange">
+                        🔄 Wapas Karna Hai
+                    </div>
+
+                    <h3 class="orange">
+                        ₹{{ "%.2f"|format(overall_wapas) }}
+                    </h3>
+
+                </div>
+
+
+            </div>
+
+        </div>
+
+
+        <!-- ================================= -->
+        <!-- DATE RANGE -->
+        <!-- ================================= -->
+
         <div class="card">
 
             <h3>
-                📅 Select Period
+                📅 Date-wise Report / तारीख अनुसार रिपोर्ट
             </h3>
 
             <form method="POST">
 
+
                 <label>
-                    From Date:
+                    <b>From Date:</b>
                 </label>
 
                 <input
@@ -2467,10 +2648,12 @@ def report():
                     required
                 >
 
+
                 <br>
 
+
                 <label>
-                    To Date:
+                    <b>To Date:</b>
                 </label>
 
                 <input
@@ -2480,7 +2663,9 @@ def report():
                     required
                 >
 
+
                 <br>
+
 
                 <button type="submit">
                     📊 Generate Report
@@ -2491,46 +2676,85 @@ def report():
         </div>
 
 
-        {% if report_data %}
+        <!-- ================================= -->
+        <!-- SELECTED PERIOD SUMMARY -->
+        <!-- ================================= -->
+
+        {% if from_date and to_date %}
 
         <div class="card">
 
-            <h3>
-                📅 Period:
+            <h3 class="period-title">
+
+                📅 Selected Period
+
+                <br>
+
                 {{ from_date }}
                 →
                 {{ to_date }}
+
             </h3>
 
+
             <p class="green">
+
                 📥 Total Jama:
+
                 <b>
                     ₹{{ "%.2f"|format(totals["jama"]) }}
                 </b>
+
             </p>
 
+
             <p class="red">
+
                 📤 Total Payout:
+
                 <b>
                     ₹{{ "%.2f"|format(totals["payout"]) }}
                 </b>
+
             </p>
 
+
             <p class="blue">
+
                 💰 Group Balance:
+
                 <b>
                     ₹{{ "%.2f"|format(totals["balance"]) }}
                 </b>
+
+            </p>
+
+
+            <p class="orange">
+
+                🔄 Wapas Karna Hai:
+
+                <b>
+                    ₹{{ "%.2f"|format(totals["wapas"]) }}
+                </b>
+
             </p>
 
         </div>
 
+
+        <!-- ================================= -->
+        <!-- MEMBER-WISE REPORT -->
+        <!-- ================================= -->
 
         <div class="card">
 
             <h3>
                 👥 Member-wise Summary
             </h3>
+
+
+            {% if report_data %}
 
             <div class="table-container">
 
@@ -2569,20 +2793,32 @@ def report():
                         👤 {{ r["name"] }}
                     </td>
 
+
                     <td class="green">
+
                         ₹{{ "%.2f"|format(r["jama"]) }}
+
                     </td>
+
 
                     <td class="red">
+
                         ₹{{ "%.2f"|format(r["payout"]) }}
+
                     </td>
 
-                    <td>
+
+                    <td class="blue">
+
                         ₹{{ "%.2f"|format(r["balance"]) }}
+
                     </td>
+
 
                     <td class="orange">
+
                         ₹{{ "%.2f"|format(r["wapas"]) }}
+
                     </td>
 
                 </tr>
@@ -2593,13 +2829,14 @@ def report():
 
             </div>
 
-        </div>
 
-        {% elif from_date and to_date %}
+            {% else %}
 
-        <div class="card">
+            <p>
+                No records found for this period.
+            </p>
 
-            No records found for this period.
+            {% endif %}
 
         </div>
 
@@ -2608,228 +2845,27 @@ def report():
 
     </div>
 
+
     </body>
 
     </html>
     """
 
+
     return render_template_string(
         html,
+
+        overall_jama=overall_jama,
+        overall_payout=overall_payout,
+        overall_balance=overall_balance,
+        overall_wapas=overall_wapas,
+
         report_data=report_data,
+
         totals=totals,
+
         from_date=from_date,
         to_date=to_date
-    )
-
-
-# =========================================================
-# CHANGE PASSWORD
-# =========================================================
-
-@app.route("/change_password", methods=["GET", "POST"])
-def change_password():
-
-    user = current_user()
-
-    if not user:
-        return redirect(url_for("login"))
-
-    message = ""
-
-    if request.method == "POST":
-
-        old_password = request.form.get(
-            "old_password",
-            ""
-        )
-
-        new_password = request.form.get(
-            "new_password",
-            ""
-        )
-
-        confirm_password = request.form.get(
-            "confirm_password",
-            ""
-        )
-
-        if not check_password_hash(
-            user["password"],
-            old_password
-        ):
-
-            message = "Old password is incorrect."
-
-        elif new_password != confirm_password:
-
-            message = "New passwords do not match."
-
-        elif len(new_password) < 4:
-
-            message = "Password must be at least 4 characters."
-
-        else:
-
-            conn = get_db()
-            cur = conn.cursor()
-
-            cur.execute("""
-                UPDATE fsc_users
-                SET password = %s
-                WHERE id = %s
-            """, (
-                generate_password_hash(new_password),
-                user["id"]
-            ))
-
-            # Also update member password
-            if user["member_id"]:
-
-                cur.execute("""
-                    UPDATE fsc_members
-                    SET password = %s
-                    WHERE id = %s
-                """, (
-                    generate_password_hash(new_password),
-                    user["member_id"]
-                ))
-
-            conn.commit()
-
-            cur.close()
-            conn.close()
-
-            message = "Password changed successfully."
-
-    html = """
-    <!DOCTYPE html>
-    <html>
-
-    <head>
-
-        <title>Change Password</title>
-
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
-
-        <style>
-
-            body {
-                font-family: Arial;
-                background: #f1f5f9;
-            }
-
-            .container {
-                width: 92%;
-                max-width: 500px;
-                margin: 30px auto;
-            }
-
-            .card {
-                background: white;
-                padding: 25px;
-                border-radius: 15px;
-            }
-
-            input {
-                width: 100%;
-                box-sizing: border-box;
-                padding: 12px;
-                margin: 7px 0 15px;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-            }
-
-            button {
-                width: 100%;
-                padding: 12px;
-                background: #2563eb;
-                color: white;
-                border: none;
-                border-radius: 8px;
-            }
-
-            .message {
-                padding: 10px;
-                background: #dbeafe;
-                border-radius: 8px;
-                margin-bottom: 15px;
-            }
-
-        </style>
-
-    </head>
-
-    <body>
-
-    <div class="container">
-
-        <div class="card">
-
-            <h2>
-                🔐 Change Password
-            </h2>
-
-            {% if message %}
-
-            <div class="message">
-                {{ message }}
-            </div>
-
-            {% endif %}
-
-            <form method="POST">
-
-                <label>
-                    Old Password
-                </label>
-
-                <input
-                    type="password"
-                    name="old_password"
-                    required
-                >
-
-
-                <label>
-                    New Password
-                </label>
-
-                <input
-                    type="password"
-                    name="new_password"
-                    required
-                >
-
-
-                <label>
-                    Confirm New Password
-                </label>
-
-                <input
-                    type="password"
-                    name="confirm_password"
-                    required
-                >
-
-
-                <button type="submit">
-                    Change Password
-                </button>
-
-            </form>
-
-        </div>
-
-    </div>
-
-    </body>
-    </html>
-    """
-
-    return render_template_string(
-        html,
-        message=message
     )
 
 

@@ -1864,44 +1864,76 @@ def my_transactions():
     if not user:
         return redirect(url_for("login"))
 
-    if user["role"] == "admin":
-        return redirect(url_for("transactions"))
-
     conn = get_db()
     cur = conn.cursor()
 
+    # सभी members की summary
     cur.execute("""
         SELECT
-            id,
-            transaction_type,
-            amount,
-            transaction_date,
-            note
+            m.id,
+            m.name,
+            COALESCE(SUM(
+                CASE
+                    WHEN t.transaction_type = 'jama'
+                    THEN t.amount
+                    ELSE 0
+                END
+            ), 0) AS total_jama,
 
-        FROM fsc_transactions
+            COALESCE(SUM(
+                CASE
+                    WHEN t.transaction_type = 'payout'
+                    THEN t.amount
+                    ELSE 0
+                END
+            ), 0) AS total_payout
 
-        WHERE member_id = %s
+        FROM fsc_members m
+
+        LEFT JOIN fsc_transactions t
+            ON m.id = t.member_id
+
+        GROUP BY m.id, m.name
+
+        ORDER BY m.name
+    """)
+
+    members = cur.fetchall()
+
+    # सभी transactions
+    cur.execute("""
+        SELECT
+            t.id,
+            m.name AS member_name,
+            t.transaction_type,
+            t.amount,
+            t.transaction_date,
+            t.note
+
+        FROM fsc_transactions t
+
+        JOIN fsc_members m
+            ON m.id = t.member_id
 
         ORDER BY
-            transaction_date DESC,
-            id DESC
-    """, (user["member_id"],))
+            t.transaction_date DESC,
+            t.id DESC
+    """)
 
     transactions = cur.fetchall()
 
     cur.close()
     conn.close()
 
+    # Overall totals
     total_jama = sum(
-        float(t["amount"])
-        for t in transactions
-        if t["transaction_type"] == "jama"
+        float(m["total_jama"])
+        for m in members
     )
 
     total_payout = sum(
-        float(t["amount"])
-        for t in transactions
-        if t["transaction_type"] == "payout"
+        float(m["total_payout"])
+        for m in members
     )
 
     balance = total_jama - total_payout
@@ -1912,7 +1944,7 @@ def my_transactions():
 
     <head>
 
-        <title>My Transactions</title>
+        <title>All Transactions</title>
 
         <meta name="viewport"
               content="width=device-width, initial-scale=1">
@@ -1933,7 +1965,7 @@ def my_transactions():
 
             .container {
                 width: 94%;
-                max-width: 900px;
+                max-width: 1000px;
                 margin: 20px auto;
             }
 
@@ -1949,6 +1981,7 @@ def my_transactions():
                 padding: 15px;
                 border-radius: 12px;
                 margin-bottom: 12px;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.08);
             }
 
             .green {
@@ -1963,6 +1996,32 @@ def my_transactions():
                 color: #2563eb;
             }
 
+            .orange {
+                color: #ea580c;
+            }
+
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                background: white;
+                border-radius: 10px;
+                overflow: hidden;
+            }
+
+            th, td {
+                padding: 10px;
+                border-bottom: 1px solid #e5e7eb;
+                text-align: left;
+            }
+
+            th {
+                background: #e2e8f0;
+            }
+
+            .table-container {
+                overflow-x: auto;
+            }
+
         </style>
 
     </head>
@@ -1972,7 +2031,7 @@ def my_transactions():
     <header>
 
         <h2>
-            📋 My Transactions
+            👥 All Members Transactions
         </h2>
 
         <a href="/dashboard"
@@ -2011,47 +2070,129 @@ def my_transactions():
         </div>
 
 
-        {% for t in transactions %}
+        <h2>📊 Member-wise Summary</h2>
+
+
+        {% for m in members %}
+
+        {% set member_balance =
+            m["total_jama"]|float -
+            m["total_payout"]|float
+        %}
+
+        {% set return_amount =
+            m["total_payout"]|float -
+            m["total_jama"]|float
+        %}
 
         <div class="card">
-
-            {% if t["transaction_type"] == "jama" %}
-
-            <b class="green">
-                📥 Jama
-            </b>
-
-            {% else %}
-
-            <b class="red">
-                📤 Payout
-            </b>
-
-            {% endif %}
 
             <h3>
-                ₹{{ "%.2f"|format(t["amount"]) }}
+                👤 {{ m["name"] }}
             </h3>
 
-            <p>
-                Date:
-                {{ t["transaction_date"] }}
+            <p class="green">
+                📥 Total Jama:
+                <b>
+                    ₹{{ "%.2f"|format(m["total_jama"]|float) }}
+                </b>
             </p>
 
-            <p>
-                Note:
-                {{ t["note"] or "-" }}
+            <p class="red">
+                📤 Total Payout:
+                <b>
+                    ₹{{ "%.2f"|format(m["total_payout"]|float) }}
+                </b>
             </p>
 
-        </div>
+            <p class="blue">
+                💰 Balance:
+                <b>
+                    ₹{{ "%.2f"|format(member_balance) }}
+                </b>
+            </p>
 
-        {% else %}
+            <p class="orange">
+                🔄 Wapas Karna Hai:
+                <b>
+                    ₹{{ "%.2f"|format(return_amount if return_amount > 0 else 0) }}
+                </b>
+            </p>
 
-        <div class="card">
-            No transactions found.
         </div>
 
         {% endfor %}
+
+
+        <h2>📋 Complete Transaction History</h2>
+
+
+        <div class="table-container">
+
+        <table>
+
+            <tr>
+                <th>Member</th>
+                <th>Type</th>
+                <th>Amount</th>
+                <th>Date</th>
+                <th>Note</th>
+            </tr>
+
+
+            {% for t in transactions %}
+
+            <tr>
+
+                <td>
+                    {{ t["member_name"] }}
+                </td>
+
+                <td>
+
+                    {% if t["transaction_type"] == "jama" %}
+
+                    <span class="green">
+                        📥 Jama
+                    </span>
+
+                    {% else %}
+
+                    <span class="red">
+                        📤 Payout
+                    </span>
+
+                    {% endif %}
+
+                </td>
+
+                <td>
+                    ₹{{ "%.2f"|format(t["amount"]|float) }}
+                </td>
+
+                <td>
+                    {{ t["transaction_date"] }}
+                </td>
+
+                <td>
+                    {{ t["note"] or "-" }}
+                </td>
+
+            </tr>
+
+            {% else %}
+
+            <tr>
+                <td colspan="5">
+                    No transactions found.
+                </td>
+            </tr>
+
+            {% endfor %}
+
+        </table>
+
+        </div>
 
     </div>
 
@@ -2061,12 +2202,12 @@ def my_transactions():
 
     return render_template_string(
         html,
+        members=members,
         transactions=transactions,
         total_jama=total_jama,
         total_payout=total_payout,
         balance=balance
     )
-
 
 # =========================================================
 # REPORT

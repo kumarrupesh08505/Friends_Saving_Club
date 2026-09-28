@@ -1680,6 +1680,150 @@ def transactions():
 # DELETE TRANSACTION
 # =========================================================
 
+@app.route("/edit_transaction/<int:transaction_id>", methods=["GET", "POST"])
+def edit_transaction(transaction_id):
+
+    if not is_admin():
+        return redirect(url_for("dashboard"))
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    if request.method == "POST":
+        member_id = request.form.get("member_id")
+        transaction_type = request.form.get("transaction_type")
+        amount = request.form.get("amount")
+        transaction_date = request.form.get("transaction_date")
+        note = request.form.get("note")
+
+        cur.execute(
+            """
+            UPDATE fsc_transactions
+            SET member_id = %s,
+                transaction_type = %s,
+                amount = %s,
+                transaction_date = %s,
+                note = %s
+            WHERE id = %s
+            """,
+            (
+                member_id,
+                transaction_type,
+                amount,
+                transaction_date,
+                note,
+                transaction_id
+            )
+        )
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return redirect(url_for("transactions"))
+
+    cur.execute(
+        """
+        SELECT *
+        FROM fsc_transactions
+        WHERE id = %s
+        """,
+        (transaction_id,)
+    )
+
+    transaction = cur.fetchone()
+
+    cur.execute(
+        """
+        SELECT id, name
+        FROM fsc_members
+        ORDER BY name
+        """
+    )
+
+    members = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    if not transaction:
+        return redirect(url_for("transactions"))
+
+    return render_template_string("""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Edit Transaction</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+
+<body style="font-family:Arial; max-width:600px; margin:30px auto; padding:20px;">
+
+<h2>✏️ Edit Transaction</h2>
+
+<form method="POST">
+
+<label>Member</label><br>
+<select name="member_id" required style="width:100%; padding:10px; margin-bottom:15px;">
+    {% for member in members %}
+        <option value="{{ member.id }}"
+            {% if member.id == transaction.member_id %}selected{% endif %}>
+            {{ member.name }}
+        </option>
+    {% endfor %}
+</select>
+
+<label>Transaction Type</label><br>
+<select name="transaction_type" required style="width:100%; padding:10px; margin-bottom:15px;">
+    <option value="jama"
+        {% if transaction.transaction_type == "jama" %}selected{% endif %}>
+        Jama / Savings Deposit
+    </option>
+
+    <option value="payout"
+        {% if transaction.transaction_type == "payout" %}selected{% endif %}>
+        Payout / Member Withdrawal
+    </option>
+</select>
+
+<label>Amount</label><br>
+<input type="number"
+       name="amount"
+       value="{{ transaction.amount }}"
+       step="0.01"
+       min="0"
+       required
+       style="width:100%; padding:10px; margin-bottom:15px;">
+
+<label>Date</label><br>
+<input type="date"
+       name="transaction_date"
+       value="{{ transaction.transaction_date }}"
+       required
+       style="width:100%; padding:10px; margin-bottom:15px;">
+
+<label>Note</label><br>
+<input type="text"
+       name="note"
+       value="{{ transaction.note or '' }}"
+       style="width:100%; padding:10px; margin-bottom:20px;">
+
+<button type="submit"
+        style="padding:12px 20px; cursor:pointer;">
+    💾 Update Transaction
+</button>
+
+</form>
+
+<br>
+
+<a href="{{ url_for('transactions') }}">⬅️ Back to Transaction History</a>
+
+</body>
+</html>
+""", transaction=transaction, members=members)
+
+
 @app.route("/delete_transaction/<int:transaction_id>")
 def delete_transaction(transaction_id):
 

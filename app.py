@@ -2216,22 +2216,16 @@ def my_transactions():
 @app.route("/report", methods=["GET", "POST"])
 def report():
 
-    if not is_admin():
-        return redirect(url_for("dashboard"))
+    user = current_user()
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    if not user:
+        return redirect(url_for("login"))
 
-    from_date = request.form.get(
-        "from_date",
-        ""
-    )
-
-    to_date = request.form.get(
-        "to_date",
-        ""
-    )
+    from_date = request.form.get("from_date", "")
+    to_date = request.form.get("to_date", "")
 
     report_data = []
+
     totals = {
         "jama": 0,
         "payout": 0,
@@ -2296,10 +2290,9 @@ def report():
             jama = float(row["jama"])
             payout = float(row["payout"])
 
-            # Amount still to return/pay back
-            wapas = max(payout - jama, 0)
-
             balance = jama - payout
+
+            wapas = max(payout - jama, 0)
 
             report_data.append({
                 "name": row["name"],
@@ -2327,7 +2320,7 @@ def report():
 
     <head>
 
-        <title>Monthly Report</title>
+        <title>Date-wise Report</title>
 
         <meta name="viewport"
               content="width=device-width, initial-scale=1">
@@ -2357,6 +2350,7 @@ def report():
                 padding: 18px;
                 border-radius: 12px;
                 margin-bottom: 15px;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.08);
             }
 
             input {
@@ -2372,6 +2366,7 @@ def report():
                 color: white;
                 border: none;
                 border-radius: 8px;
+                cursor: pointer;
             }
 
             table {
@@ -2402,6 +2397,14 @@ def report():
                 color: #2563eb;
             }
 
+            .orange {
+                color: #ea580c;
+            }
+
+            .table-container {
+                overflow-x: auto;
+            }
+
             @media(max-width:700px) {
 
                 table {
@@ -2410,6 +2413,15 @@ def report():
 
                 th, td {
                     padding: 7px;
+                }
+
+                input {
+                    width: 90%;
+                    margin: 5px 0;
+                }
+
+                button {
+                    margin-top: 8px;
                 }
 
             }
@@ -2423,7 +2435,7 @@ def report():
     <header>
 
         <h2>
-            📊 Monthly Report / रिपोर्ट
+            📊 Date-wise Report / तारीख अनुसार रिपोर्ट
         </h2>
 
         <a href="/dashboard"
@@ -2440,7 +2452,7 @@ def report():
         <div class="card">
 
             <h3>
-                Custom Date Report
+                📅 Select Period
             </h3>
 
             <form method="POST">
@@ -2456,6 +2468,8 @@ def report():
                     required
                 >
 
+                <br>
+
                 <label>
                     To Date:
                 </label>
@@ -2467,8 +2481,10 @@ def report():
                     required
                 >
 
+                <br>
+
                 <button type="submit">
-                    Generate Report
+                    📊 Generate Report
                 </button>
 
             </form>
@@ -2481,31 +2497,43 @@ def report():
         <div class="card">
 
             <h3>
-                Period:
+                📅 Period:
                 {{ from_date }}
                 →
                 {{ to_date }}
             </h3>
 
             <p class="green">
-                Total Jama:
-                ₹{{ "%.2f"|format(totals["jama"]) }}
+                📥 Total Jama:
+                <b>
+                    ₹{{ "%.2f"|format(totals["jama"]) }}
+                </b>
             </p>
 
             <p class="red">
-                Total Payout:
-                ₹{{ "%.2f"|format(totals["payout"]) }}
+                📤 Total Payout:
+                <b>
+                    ₹{{ "%.2f"|format(totals["payout"]) }}
+                </b>
             </p>
 
             <p class="blue">
-                Group Balance:
-                ₹{{ "%.2f"|format(totals["balance"]) }}
+                💰 Group Balance:
+                <b>
+                    ₹{{ "%.2f"|format(totals["balance"]) }}
+                </b>
             </p>
 
         </div>
 
 
         <div class="card">
+
+            <h3>
+                👥 Member-wise Summary
+            </h3>
+
+            <div class="table-container">
 
             <table>
 
@@ -2539,7 +2567,7 @@ def report():
                 <tr>
 
                     <td>
-                        {{ r["name"] }}
+                        👤 {{ r["name"] }}
                     </td>
 
                     <td class="green">
@@ -2554,7 +2582,7 @@ def report():
                         ₹{{ "%.2f"|format(r["balance"]) }}
                     </td>
 
-                    <td>
+                    <td class="orange">
                         ₹{{ "%.2f"|format(r["wapas"]) }}
                     </td>
 
@@ -2564,19 +2592,25 @@ def report():
 
             </table>
 
+            </div>
+
         </div>
 
         {% elif from_date and to_date %}
 
         <div class="card">
+
             No records found for this period.
+
         </div>
 
         {% endif %}
 
+
     </div>
 
     </body>
+
     </html>
     """
 
@@ -2585,8 +2619,7 @@ def report():
         report_data=report_data,
         totals=totals,
         from_date=from_date,
-        to_date=to_date,
-        today=today
+        to_date=to_date
     )
 
 

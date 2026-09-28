@@ -1946,25 +1946,39 @@ def my_transactions():
 
 
     total_jama = sum(
-        float(m["total_jama"])
-        for m in members
-    )
+    float(m["total_jama"])
+    for m in members
+)
 
-    total_payout = sum(
-        float(m["total_payout"])
-        for m in members
-    )
+total_payout = sum(
+    float(m["total_payout"])
+    for m in members
+)
 
-    balance = total_jama - total_payout
+balance = total_jama - total_payout
 
-    total_baaki = max(
-        total_jama - total_payout,
+
+# Total Baaki:
+# Sirf un members ka jinhone payout liya hai
+total_baaki = sum(
+    max(
+        float(m["total_jama"]) - float(m["total_payout"]),
         0
     )
+    for m in members
+    if float(m["total_payout"]) > 0
+)
 
-    total_wapas = max(
-        total_payout - total_jama,
+
+# Total Wapas:
+# Sirf un members ka jinhone jama se zyada liya hai
+total_wapas = sum(
+    max(
+        float(m["total_payout"]) - float(m["total_jama"]),
         0
+    )
+    for m in members
+    if float(m["total_payout"]) > float(m["total_jama"])
     )
 
 

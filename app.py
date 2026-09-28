@@ -2507,10 +2507,11 @@ def report():
     report_data = []
 
     totals = {
-        "jama": 0,
-        "payout": 0,
-        "balance": 0,
-        "wapas": 0
+    "jama": 0,
+    "payout": 0,
+    "balance": 0,
+    "baaki": 0,
+    "wapas": 0
     }
 
 

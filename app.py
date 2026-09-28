@@ -14,28 +14,31 @@ app.secret_key = os.environ.get(
 )
 
 
-# =========================================================
+# =========================
 # DATABASE CONNECTION
-# =========================================================
+# =========================
 
-def get_db():
-    conn = psycopg.connect(
-        os.environ["DATABASE_URL"],
+def get_conn():
+    database_url = os.environ.get("DATABASE_URL")
+
+    if not database_url:
+        raise Exception("DATABASE_URL is not set")
+
+    return psycopg.connect(
+        database_url,
         row_factory=dict_row
     )
-    return conn
 
 
-# =========================================================
+# =========================
 # DATABASE INITIALIZATION
-# =========================================================
+# =========================
 
 def init_db():
 
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
-    # Members table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS fsc_members (
             id SERIAL PRIMARY KEY,
@@ -47,81 +50,73 @@ def init_db():
         )
     """)
 
-    # Transactions table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS fsc_transactions (
             id SERIAL PRIMARY KEY,
-            member_id INTEGER NOT NULL,
+            member_id INTEGER REFERENCES fsc_members(id) ON DELETE CASCADE,
             transaction_type TEXT NOT NULL,
             amount NUMERIC(12,2) NOT NULL,
             transaction_date DATE NOT NULL,
             note TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (member_id)
-                REFERENCES fsc_members(id)
-                ON DELETE CASCADE
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    # Users table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS fsc_users (
             id SERIAL PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'member',
-            member_id INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (member_id)
-                REFERENCES fsc_members(id)
-                ON DELETE CASCADE
+            role TEXT NOT NULL,
+            member_id INTEGER REFERENCES fsc_members(id) ON DELETE CASCADE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    conn.commit()
-
-    # Create default admin if not present
-    cur.execute(
-        "SELECT id FROM fsc_users WHERE username = %s",
-        ("admin",)
-    )
+    # Default admin
+    cur.execute("""
+        SELECT id
+        FROM fsc_users
+        WHERE username = 'admin'
+    """)
 
     admin = cur.fetchone()
 
     if not admin:
-        cur.execute(
-            """
+
+        cur.execute("""
             INSERT INTO fsc_users
             (username, password, role)
             VALUES (%s, %s, %s)
-            """,
-            (
-                "admin",
-                generate_password_hash("1234"),
-                "admin"
-            )
-        )
-        conn.commit()
+        """, (
+            "admin",
+            generate_password_hash("1234"),
+            "admin"
+        ))
+
+    conn.commit()
 
     cur.close()
     conn.close()
 
 
-# =========================================================
-# HELPER FUNCTIONS
-# =========================================================
+# =========================
+# HELPERS
+# =========================
 
 def current_user():
+
     if "user_id" not in session:
         return None
 
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT * FROM fsc_users WHERE id = %s",
-        (session["user_id"],)
-    )
+    cur.execute("""
+        SELECT *
+        FROM fsc_users
+        WHERE id = %s
+    """, (session["user_id"],))
 
     user = cur.fetchone()
 
@@ -132,7 +127,9 @@ def current_user():
 
 
 def is_admin():
+
     user = current_user()
+
     return user and user["role"] == "admin"
 
 
@@ -140,22 +137,17 @@ def get_member_for_user():
 
     user = current_user()
 
-    if not user:
+    if not user or not user["member_id"]:
         return None
 
-    if user["role"] == "admin":
-        return None
-
-    if not user["member_id"]:
-        return None
-
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT * FROM fsc_members WHERE id = %s",
-        (user["member_id"],)
-    )
+    cur.execute("""
+        SELECT *
+        FROM fsc_members
+        WHERE id = %s
+    """, (user["member_id"],))
 
     member = cur.fetchone()
 
@@ -165,143 +157,116 @@ def get_member_for_user():
     return member
 
 
-# =========================================================
-# LOGIN
-# =========================================================
+# =========================
+# LOGIN PAGE
+# =========================
 
 LOGIN_HTML = """
 <!DOCTYPE html>
+
 <html>
+
 <head>
-    <title>Friend Saving Club - Login</title>
 
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <style>
+<title>Friend Saving Club - Login</title>
 
-        body {
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: #f1f5f9;
-        }
+<style>
 
-        .container {
-            width: 92%;
-            max-width: 420px;
-            margin: 70px auto;
-        }
+body {
+    font-family: Arial;
+    background: linear-gradient(135deg,#667eea,#764ba2);
+    margin: 0;
+    padding: 0;
+}
 
-        .card {
-            background: white;
-            padding: 28px;
-            border-radius: 18px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.12);
-        }
+.box {
+    width: 90%;
+    max-width: 400px;
+    margin: 100px auto;
+    background: white;
+    padding: 30px;
+    border-radius: 15px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    box-sizing: border-box;
+}
 
-        h1 {
-            text-align: center;
-            color: #1e3a8a;
-            margin-bottom: 5px;
-        }
+h1 {
+    text-align: center;
+    color: #333;
+}
 
-        .subtitle {
-            text-align: center;
-            color: #64748b;
-            margin-bottom: 25px;
-        }
+input {
+    width: 100%;
+    padding: 12px;
+    margin: 8px 0;
+    box-sizing: border-box;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+}
 
-        label {
-            font-weight: bold;
-            display: block;
-            margin-top: 15px;
-        }
+button {
+    width: 100%;
+    padding: 12px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+}
 
-        input {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 12px;
-            margin-top: 7px;
-            border: 1px solid #cbd5e1;
-            border-radius: 10px;
-            font-size: 16px;
-        }
+button:hover {
+    background: #5568d8;
+}
 
-        button {
-            width: 100%;
-            padding: 13px;
-            margin-top: 22px;
-            border: none;
-            border-radius: 10px;
-            background: #2563eb;
-            color: white;
-            font-size: 17px;
-            font-weight: bold;
-        }
+.error {
+    color: red;
+    text-align: center;
+    margin-bottom: 10px;
+}
 
-        .error {
-            background: #fee2e2;
-            color: #991b1b;
-            padding: 10px;
-            border-radius: 8px;
-            margin-bottom: 15px;
-            text-align: center;
-        }
+</style>
 
-    </style>
 </head>
 
 <body>
 
-<div class="container">
+<div class="box">
 
-    <div class="card">
+<h1>💰 Friend Saving Club</h1>
 
-        <h1>Friend Saving Club</h1>
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
 
-        <div class="subtitle">
-            Login / लॉगिन
-        </div>
+<form method="POST">
 
-        {% if error %}
-        <div class="error">
-            {{ error }}
-        </div>
-        {% endif %}
+<input
+type="text"
+name="username"
+placeholder="Username"
+required
+>
 
-        <form method="POST">
+<input
+type="password"
+name="password"
+placeholder="Password"
+required
+>
 
-            <label>
-                Username / यूज़रनेम
-            </label>
+<button type="submit">
+Login
+</button>
 
-            <input
-                type="text"
-                name="username"
-                required
-            >
-
-            <label>
-                Password / पासवर्ड
-            </label>
-
-            <input
-                type="password"
-                name="password"
-                required
-            >
-
-            <button type="submit">
-                Login / लॉगिन
-            </button>
-
-        </form>
-
-    </div>
+</form>
 
 </div>
 
 </body>
+
 </html>
 """
 
@@ -311,29 +276,27 @@ def login():
 
     if request.method == "POST":
 
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
+        username = request.form.get("username")
+        password = request.form.get("password")
 
-        conn = get_db()
+        conn = get_conn()
         cur = conn.cursor()
 
-        cur.execute(
-            "SELECT * FROM fsc_users WHERE username = %s",
-            (username,)
-        )
+        cur.execute("""
+            SELECT *
+            FROM fsc_users
+            WHERE username = %s
+        """, (username,))
 
         user = cur.fetchone()
 
         cur.close()
         conn.close()
 
-        if user and check_password_hash(
-            user["password"],
-            password
-        ):
+        if user and check_password_hash(user["password"], password):
 
-            session.clear()
             session["user_id"] = user["id"]
+            session["role"] = user["role"]
 
             return redirect(url_for("dashboard"))
 
@@ -348,9 +311,9 @@ def login():
     )
 
 
-# =========================================================
+# =========================
 # LOGOUT
-# =========================================================
+# =========================
 
 @app.route("/logout")
 def logout():
@@ -360,9 +323,9 @@ def logout():
     return redirect(url_for("login"))
 
 
-# =========================================================
+# =========================
 # DASHBOARD
-# =========================================================
+# =========================
 
 @app.route("/dashboard")
 def dashboard():
@@ -372,10 +335,10 @@ def dashboard():
     if not user:
         return redirect(url_for("login"))
 
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
-    # सभी members का overall total
+    # Overall Jama and Payout
     cur.execute("""
         SELECT
             COALESCE(
@@ -403,7 +366,63 @@ def dashboard():
 
     totals = cur.fetchone()
 
-    # Total members
+    total_jama = float(totals["total_jama"])
+    total_payout = float(totals["total_payout"])
+
+    # Total Amount = Current Balance
+    total_amount = total_jama - total_payout
+
+    # Member-wise Baaki/Wapas
+    cur.execute("""
+        SELECT
+            m.id,
+            m.name,
+
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN t.transaction_type = 'jama'
+                        THEN t.amount
+                        ELSE 0
+                    END
+                ), 0
+            ) AS jama,
+
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN t.transaction_type = 'payout'
+                        THEN t.amount
+                        ELSE 0
+                    END
+                ), 0
+            ) AS payout
+
+        FROM fsc_members m
+
+        LEFT JOIN fsc_transactions t
+        ON m.id = t.member_id
+
+        GROUP BY m.id, m.name
+    """)
+
+    members = cur.fetchall()
+
+    total_baaki = 0
+    total_wapas = 0
+
+    for member in members:
+
+        jama = float(member["jama"])
+        payout = float(member["payout"])
+
+        if payout > 0 and jama > payout:
+            total_baaki += jama - payout
+
+        if payout > jama:
+            total_wapas += payout - jama
+
+    # Member count
     cur.execute("""
         SELECT COUNT(*) AS count
         FROM fsc_members
@@ -411,302 +430,255 @@ def dashboard():
 
     member_count = cur.fetchone()["count"]
 
-    total_jama = float(totals["total_jama"])
-    total_payout = float(totals["total_payout"])
-
-    balance = total_jama - total_payout
-
-    # Overall Wapas Karna Hai
-    total_wapas = max(total_payout - total_jama, 0)
-
     cur.close()
     conn.close()
 
     html = """
-    <!DOCTYPE html>
-    <html>
-
-    <head>
-
-        <title>Dashboard - Friend Saving Club</title>
-
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
-
-        <style>
-
-            body {
-                margin: 0;
-                font-family: Arial, sans-serif;
-                background: #f1f5f9;
-            }
-
-            header {
-                background: #1e3a8a;
-                color: white;
-                padding: 18px;
-            }
-
-            header h2 {
-                margin: 0;
-            }
-
-            nav {
-                margin-top: 10px;
-            }
-
-            nav a {
-                color: white;
-                text-decoration: none;
-                margin-right: 15px;
-                font-size: 14px;
-            }
-
-            .container {
-                width: 94%;
-                max-width: 1100px;
-                margin: 20px auto;
-            }
-
-            .cards {
-                display: grid;
-                grid-template-columns:
-                    repeat(auto-fit, minmax(200px, 1fr));
-                gap: 15px;
-            }
-
-            .card {
-                background: white;
-                padding: 20px;
-                border-radius: 15px;
-                box-shadow: 0 3px 12px rgba(0,0,0,0.08);
-            }
 
-            .title {
-                color: #64748b;
-                font-size: 14px;
-            }
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Dashboard</title>
 
-            .value {
-                font-size: 28px;
-                font-weight: bold;
-                margin-top: 8px;
-            }
+<style>
 
-            .green {
-                color: #15803d;
-            }
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+    margin: 0;
+}
 
-            .red {
-                color: #dc2626;
-            }
+.header {
+    background: linear-gradient(135deg,#667eea,#764ba2);
+    color: white;
+    padding: 20px;
+}
 
-            .blue {
-                color: #2563eb;
-            }
+.header h1 {
+    margin: 0;
+}
 
-            .orange {
-                color: #ea580c;
-            }
+.container {
+    width: 94%;
+    max-width: 1100px;
+    margin: 20px auto;
+}
 
-            .links {
-                margin-top: 20px;
-            }
+.cards {
+    display: grid;
+    grid-template-columns:
+    repeat(auto-fit,minmax(180px,1fr));
 
-            .links a {
-                display: inline-block;
-                background: white;
-                padding: 14px 18px;
-                margin: 5px;
-                border-radius: 10px;
-                text-decoration: none;
-                color: #1e3a8a;
-                font-weight: bold;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            }
+    gap: 15px;
+}
 
-        </style>
+.card {
+    background: white;
+    padding: 20px;
+    border-radius: 14px;
+    box-shadow:
+    0 5px 15px rgba(0,0,0,0.08);
+}
 
-    </head>
+.card h3 {
+    margin-top: 0;
+    color: #555;
+}
 
-    <body>
+.amount {
+    font-size: 25px;
+    font-weight: bold;
+    color: #222;
+}
 
-    <header>
+.menu {
+    margin-top: 25px;
+    display: grid;
+    grid-template-columns:
+    repeat(auto-fit,minmax(180px,1fr));
+    gap: 12px;
+}
 
-        <h2>
-            Friend Saving Club
-        </h2>
+.menu a {
+    background: white;
+    padding: 15px;
+    border-radius: 10px;
+    text-decoration: none;
+    color: #333;
+    box-shadow:
+    0 4px 10px rgba(0,0,0,0.08);
+}
 
-        <nav>
+.logout {
+    float: right;
+    color: white;
+    text-decoration: none;
+}
 
-            <a href="/dashboard">
-                Dashboard
-            </a>
+</style>
 
-            {% if user["role"] == "admin" %}
+</head>
 
-            <a href="/members">
-                Members
-            </a>
+<body>
 
-            <a href="/add_transaction">
-                Record Payout
-            </a>
+<div class="header">
 
-            <a href="/report">
-                Monthly Report
-            </a>
+<a class="logout"
+href="/logout">
+Logout
+</a>
 
-            {% else %}
+<h1>💰 Friend Saving Club</h1>
 
-            <a href="/my_transactions">
-                My Transactions
-            </a>
+<p>
+Welcome, {{ user["username"] }}
+</p>
 
-            <a href="/report">
-                📊 Report
-            </a>
+</div>
 
-            {% endif %}
+<div class="container">
 
-            <a href="/change_password">
-                Change Password
-            </a>
+<div class="cards">
 
-            <a href="/logout">
-                Logout
-            </a>
+<div class="card">
 
-        </nav>
+<h3>💵 Total Jama</h3>
 
-    </header>
+<div class="amount">
+₹{{ "%.2f"|format(total_jama) }}
+</div>
 
+</div>
 
-    <div class="container">
 
-        <div class="cards">
+<div class="card">
 
-            <div class="card">
+<h3>💸 Total Payout</h3>
 
-                <div class="title">
-                    📥 Total Jama / कुल जमा
-                </div>
+<div class="amount">
+₹{{ "%.2f"|format(total_payout) }}
+</div>
 
-                <div class="value green">
-                    ₹{{ "%.2f"|format(total_jama) }}
-                </div>
+</div>
 
-            </div>
 
+<div class="card">
 
-            <div class="card">
+<h3>💰 Total Amount / Balance</h3>
 
-                <div class="title">
-                    📤 Total Payout / कुल भुगतान
-                </div>
+<div class="amount">
+₹{{ "%.2f"|format(total_amount) }}
+</div>
 
-                <div class="value red">
-                    ₹{{ "%.2f"|format(total_payout) }}
-                </div>
+</div>
 
-            </div>
 
+<div class="card">
 
-            <div class="card">
+<h3>📌 Total Baaki</h3>
 
-                <div class="title">
-                    💰 Balance / शेष राशि
-                </div>
+<div class="amount">
+₹{{ "%.2f"|format(total_baaki) }}
+</div>
 
-                <div class="value blue">
-                    ₹{{ "%.2f"|format(balance) }}
-                </div>
+</div>
 
-            </div>
 
+<div class="card">
 
-            <div class="card">
+<h3>🔄 Wapas Karna Hai</h3>
 
-                <div class="title">
-                    🔄 Wapas Karna Hai / वापस करना है
-                </div>
+<div class="amount">
+₹{{ "%.2f"|format(total_wapas) }}
+</div>
 
-                <div class="value orange">
-                    ₹{{ "%.2f"|format(total_wapas) }}
-                </div>
+</div>
 
-            </div>
 
+<div class="card">
 
-            <div class="card">
+<h3>👥 Members</h3>
 
-                <div class="title">
-                    👥 Members / सदस्य
-                </div>
+<div class="amount">
+{{ member_count }}
+</div>
 
-                <div class="value">
-                    {{ member_count }}
-                </div>
+</div>
 
-            </div>
+</div>
 
-        </div>
 
+<div class="menu">
 
-        <div class="links">
+{% if user["role"] == "admin" %}
 
-            {% if user["role"] == "admin" %}
+<a href="/members">
+👥 Members
+</a>
 
-            <a href="/members">
-                👥 Manage Members
-            </a>
+<a href="/add_member">
+➕ Add Member
+</a>
 
-            <a href="/add_transaction">
-                📤 Record Payout
-            </a>
+<a href="/add_transaction">
+💰 Record Transaction
+</a>
 
-            <a href="/report">
-                📊 Monthly Report
-            </a>
+<a href="/transactions">
+📋 Transaction History
+</a>
 
-            <a href="/transactions">
-                📋 Transaction History
-            </a>
+<a href="/report">
+📊 Monthly / Date Report
+</a>
 
-            {% else %}
+{% else %}
 
-            <a href="/my_transactions">
-                📋 All Transaction History
-            </a>
+<a href="/my_transactions">
+📋 My Transactions
+</a>
 
-            <a href="/report">
-                📊 Date-wise Report
-            </a>
+<a href="/report">
+📊 Report
+</a>
 
-            {% endif %}
+{% endif %}
 
-        </div>
+<a href="/change_password">
+🔐 Change Password
+</a>
 
-    </div>
+</div>
 
-    </body>
-    </html>
-    """
+</div>
+
+</body>
+
+</html>
+
+"""
 
     return render_template_string(
         html,
         user=user,
         total_jama=total_jama,
         total_payout=total_payout,
-        balance=balance,
+        total_amount=total_amount,
+        total_baaki=total_baaki,
         total_wapas=total_wapas,
         member_count=member_count
     )
 
 
-# =========================================================
+# =========================
 # MEMBERS
-# =========================================================
+# =========================
 
 @app.route("/members")
 def members():
@@ -714,16 +686,11 @@ def members():
     if not is_admin():
         return redirect(url_for("dashboard"))
 
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT
-            id,
-            name,
-            username,
-            phone,
-            created_at
+        SELECT *
         FROM fsc_members
         ORDER BY id DESC
     """)
@@ -734,143 +701,125 @@ def members():
     conn.close()
 
     html = """
-    <!DOCTYPE html>
-    <html>
 
-    <head>
+<!DOCTYPE html>
 
-        <title>Members - Friend Saving Club</title>
+<html>
 
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
+<head>
 
-        <style>
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
 
-            body {
-                font-family: Arial;
-                background: #f1f5f9;
-                margin: 0;
-            }
+<title>Members</title>
 
-            header {
-                background: #1e3a8a;
-                color: white;
-                padding: 18px;
-            }
+<style>
 
-            .container {
-                width: 94%;
-                max-width: 1100px;
-                margin: 20px auto;
-            }
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
 
-            .btn {
-                display: inline-block;
-                background: #2563eb;
-                color: white;
-                padding: 10px 15px;
-                border-radius: 8px;
-                text-decoration: none;
-                margin-bottom: 15px;
-            }
+.container {
+    width: 94%;
+    max-width: 1000px;
+    margin: 20px auto;
+}
 
-            .card {
-                background: white;
-                padding: 15px;
-                border-radius: 12px;
-                margin-bottom: 12px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            }
+.card {
+    background: white;
+    padding: 18px;
+    margin-bottom: 12px;
+    border-radius: 12px;
+    box-shadow:
+    0 4px 10px rgba(0,0,0,0.08);
+}
 
-            .actions a {
-                margin-right: 10px;
-                text-decoration: none;
-            }
+a {
+    text-decoration: none;
+}
 
-            .delete {
-                color: #dc2626;
-            }
+.btn {
+    display: inline-block;
+    padding: 9px 13px;
+    background: #667eea;
+    color: white;
+    border-radius: 7px;
+    margin: 3px;
+}
 
-            .edit {
-                color: #2563eb;
-            }
+.delete {
+    background: #e74c3c;
+}
 
-        </style>
+.back {
+    background: #555;
+}
 
-    </head>
+</style>
 
-    <body>
+</head>
 
-    <header>
+<body>
 
-        <h2>
-            👥 Members / सदस्य
-        </h2>
+<div class="container">
 
-        <a href="/dashboard"
-           style="color:white;">
-            Dashboard
-        </a>
+<h1>👥 Members</h1>
 
-    </header>
+<a class="btn"
+href="/dashboard">
+⬅ Dashboard
+</a>
 
+<a class="btn"
+href="/add_member">
+➕ Add Member
+</a>
 
-    <div class="container">
+<hr>
 
-        <a class="btn"
-           href="/add_member">
-            ➕ Add Member / सदस्य जोड़ें
-        </a>
+{% for m in members %}
 
+<div class="card">
 
-        {% for member in members %}
+<h2>
+{{ m["name"] }}
+</h2>
 
-        <div class="card">
+<p>
+Username: {{ m["username"] }}
+</p>
 
-            <h3>
-                {{ member["name"] }}
-            </h3>
+<p>
+Phone: {{ m["phone"] or "-" }}
+</p>
 
-            <p>
-                Username:
-                {{ member["username"] }}
-            </p>
+<a class="btn"
+href="/edit_member/{{ m["id"] }}">
+✏ Edit
+</a>
 
-            <p>
-                Phone:
-                {{ member["phone"] or "-" }}
-            </p>
+<a class="btn delete"
+href="/delete_member/{{ m["id"] }}"
+onclick="return confirm('Delete this member?')">
+🗑 Delete
+</a>
 
-            <div class="actions">
+</div>
 
-                <a class="edit"
-                   href="/edit_member/{{ member["id"] }}">
-                    ✏️ Edit
-                </a>
+{% else %}
 
-                <a class="delete"
-                   href="/delete_member/{{ member["id"] }}"
-                   onclick="return confirm('Delete this member?')">
-                    🗑 Delete
-                </a>
+<p>No members found.</p>
 
-            </div>
+{% endfor %}
 
-        </div>
+</div>
 
-        {% else %}
+</body>
 
-        <div class="card">
-            No members found.
-        </div>
+</html>
 
-        {% endfor %}
-
-    </div>
-
-    </body>
-    </html>
-    """
+"""
 
     return render_template_string(
         html,
@@ -878,9 +827,9 @@ def members():
     )
 
 
-# =========================================================
+# =========================
 # ADD MEMBER
-# =========================================================
+# =========================
 
 @app.route("/add_member", methods=["GET", "POST"])
 def add_member():
@@ -890,15 +839,12 @@ def add_member():
 
     if request.method == "POST":
 
-        name = request.form.get("name", "").strip()
-        username = request.form.get("username", "").strip()
-        phone = request.form.get("phone", "").strip()
-        password = request.form.get("password", "1234")
+        name = request.form.get("name")
+        username = request.form.get("username")
+        password = request.form.get("password")
+        phone = request.form.get("phone")
 
-        if not name or not username:
-            return "Name and username are required."
-
-        conn = get_db()
+        conn = get_conn()
         cur = conn.cursor()
 
         try:
@@ -933,164 +879,159 @@ def add_member():
         except UniqueViolation:
 
             conn.rollback()
+
             cur.close()
             conn.close()
 
-            return "Username already exists."
+            return """
+            <h2>Username already exists.</h2>
+            <a href="/add_member">Go Back</a>
+            """
 
         cur.close()
         conn.close()
 
         return redirect(url_for("members"))
 
-
     html = """
-    <!DOCTYPE html>
-    <html>
 
-    <head>
+<!DOCTYPE html>
 
-        <title>Add Member</title>
+<html>
 
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
+<head>
 
-        <style>
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
 
-            body {
-                font-family: Arial;
-                background: #f1f5f9;
-            }
+<title>Add Member</title>
 
-            .container {
-                width: 92%;
-                max-width: 500px;
-                margin: 30px auto;
-            }
+<style>
 
-            .card {
-                background: white;
-                padding: 25px;
-                border-radius: 15px;
-            }
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
 
-            input {
-                width: 100%;
-                box-sizing: border-box;
-                padding: 12px;
-                margin: 7px 0 15px;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-            }
+.box {
+    width: 94%;
+    max-width: 500px;
+    margin: 30px auto;
+    background: white;
+    padding: 25px;
+    border-radius: 14px;
+}
 
-            button {
-                width: 100%;
-                padding: 12px;
-                background: #2563eb;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 16px;
-            }
+input {
+    width: 100%;
+    padding: 12px;
+    margin: 8px 0;
+    box-sizing: border-box;
+}
 
-        </style>
+button {
+    width: 100%;
+    padding: 12px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 8px;
+}
 
-    </head>
+a {
+    display: inline-block;
+    margin-top: 15px;
+}
 
-    <body>
+</style>
 
-    <div class="container">
+</head>
 
-        <div class="card">
+<body>
 
-            <h2>
-                ➕ Add Member
-            </h2>
+<div class="box">
 
-            <form method="POST">
+<h1>➕ Add Member</h1>
 
-                <label>Name / नाम</label>
+<form method="POST">
 
-                <input
-                    type="text"
-                    name="name"
-                    required
-                >
+<input
+name="name"
+placeholder="Member Name"
+required
+>
 
+<input
+name="username"
+placeholder="Username"
+required
+>
 
-                <label>Username</label>
+<input
+name="password"
+placeholder="Password"
+required
+>
 
-                <input
-                    type="text"
-                    name="username"
-                    required
-                >
+<input
+name="phone"
+placeholder="Phone Number"
+>
 
+<button type="submit">
+Add Member
+</button>
 
-                <label>Phone / मोबाइल</label>
+</form>
 
-                <input
-                    type="text"
-                    name="phone"
-                >
+<a href="/members">
+⬅ Back
+</a>
 
+</div>
 
-                <label>Password / पासवर्ड</label>
+</body>
 
-                <input
-                    type="text"
-                    name="password"
-                    value="1234"
-                >
+</html>
 
-
-                <button type="submit">
-                    Save Member
-                </button>
-
-            </form>
-
-        </div>
-
-    </div>
-
-    </body>
-    </html>
-    """
+"""
 
     return render_template_string(html)
 
 
-# =========================================================
+# =========================
 # EDIT MEMBER
-# =========================================================
+# =========================
 
-@app.route("/edit_member/<int:member_id>", methods=["GET", "POST"])
-def edit_member(member_id):
+@app.route("/edit_member/<int:id>", methods=["GET", "POST"])
+def edit_member(id):
 
     if not is_admin():
         return redirect(url_for("dashboard"))
 
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT * FROM fsc_members WHERE id = %s",
-        (member_id,)
-    )
+    cur.execute("""
+        SELECT *
+        FROM fsc_members
+        WHERE id = %s
+    """, (id,))
 
     member = cur.fetchone()
 
     if not member:
+
         cur.close()
         conn.close()
-        return "Member not found."
+
+        return "Member not found"
 
     if request.method == "POST":
 
-        name = request.form.get("name", "").strip()
-        username = request.form.get("username", "").strip()
-        phone = request.form.get("phone", "").strip()
+        name = request.form.get("name")
+        username = request.form.get("username")
+        phone = request.form.get("phone")
 
         cur.execute("""
             UPDATE fsc_members
@@ -1102,7 +1043,7 @@ def edit_member(member_id):
             name,
             username,
             phone,
-            member_id
+            id
         ))
 
         cur.execute("""
@@ -1111,7 +1052,7 @@ def edit_member(member_id):
             WHERE member_id = %s
         """, (
             username,
-            member_id
+            id
         ))
 
         conn.commit()
@@ -1125,111 +1066,98 @@ def edit_member(member_id):
     conn.close()
 
     html = """
-    <!DOCTYPE html>
-    <html>
 
-    <head>
+<!DOCTYPE html>
 
-        <title>Edit Member</title>
+<html>
 
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
+<head>
 
-        <style>
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
 
-            body {
-                font-family: Arial;
-                background: #f1f5f9;
-            }
+<title>Edit Member</title>
 
-            .container {
-                width: 92%;
-                max-width: 500px;
-                margin: 30px auto;
-            }
+<style>
 
-            .card {
-                background: white;
-                padding: 25px;
-                border-radius: 15px;
-            }
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
 
-            input {
-                width: 100%;
-                box-sizing: border-box;
-                padding: 12px;
-                margin: 7px 0 15px;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-            }
+.box {
+    width: 94%;
+    max-width: 500px;
+    margin: 30px auto;
+    background: white;
+    padding: 25px;
+    border-radius: 14px;
+}
 
-            button {
-                width: 100%;
-                padding: 12px;
-                background: #2563eb;
-                color: white;
-                border: none;
-                border-radius: 8px;
-            }
+input {
+    width: 100%;
+    padding: 12px;
+    margin: 8px 0;
+    box-sizing: border-box;
+}
 
-        </style>
+button {
+    width: 100%;
+    padding: 12px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 8px;
+}
 
-    </head>
+</style>
 
-    <body>
+</head>
 
-    <div class="container">
+<body>
 
-        <div class="card">
+<div class="box">
 
-            <h2>
-                ✏️ Edit Member
-            </h2>
+<h1>✏ Edit Member</h1>
 
-            <form method="POST">
+<form method="POST">
 
-                <label>Name</label>
+<input
+name="name"
+value="{{ member["name"] }}"
+required
+>
 
-                <input
-                    type="text"
-                    name="name"
-                    value="{{ member['name'] }}"
-                    required
-                >
+<input
+name="username"
+value="{{ member["username"] }}"
+required
+>
 
+<input
+name="phone"
+value="{{ member["phone"] or "" }}"
+>
 
-                <label>Username</label>
+<button type="submit">
+Update Member
+</button>
 
-                <input
-                    type="text"
-                    name="username"
-                    value="{{ member['username'] }}"
-                    required
-                >
+</form>
 
+<p>
+<a href="/members">
+⬅ Back
+</a>
+</p>
 
-                <label>Phone</label>
+</div>
 
-                <input
-                    type="text"
-                    name="phone"
-                    value="{{ member['phone'] or '' }}"
-                >
+</body>
 
+</html>
 
-                <button type="submit">
-                    Update Member
-                </button>
-
-            </form>
-
-        </div>
-
-    </div>
-
-    </body>
-    </html>
-    """
+"""
 
     return render_template_string(
         html,
@@ -1237,39 +1165,25 @@ def edit_member(member_id):
     )
 
 
-# =========================================================
+# =========================
 # DELETE MEMBER
-# =========================================================
+# =========================
 
-@app.route("/delete_member/<int:member_id>")
-def delete_member(member_id):
+@app.route("/delete_member/<int:id>")
+def delete_member(id):
 
     if not is_admin():
         return redirect(url_for("dashboard"))
 
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute(
-        "SELECT username FROM fsc_members WHERE id = %s",
-        (member_id,)
-    )
+    cur.execute("""
+        DELETE FROM fsc_members
+        WHERE id = %s
+    """, (id,))
 
-    member = cur.fetchone()
-
-    if member:
-
-        cur.execute(
-            "DELETE FROM fsc_users WHERE member_id = %s",
-            (member_id,)
-        )
-
-        cur.execute(
-            "DELETE FROM fsc_members WHERE id = %s",
-            (member_id,)
-        )
-
-        conn.commit()
+    conn.commit()
 
     cur.close()
     conn.close()
@@ -1277,9 +1191,9 @@ def delete_member(member_id):
     return redirect(url_for("members"))
 
 
-# =========================================================
+# =========================
 # ADD TRANSACTION
-# =========================================================
+# =========================
 
 @app.route("/add_transaction", methods=["GET", "POST"])
 def add_transaction():
@@ -1287,7 +1201,7 @@ def add_transaction():
     if not is_admin():
         return redirect(url_for("dashboard"))
 
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
@@ -1304,7 +1218,14 @@ def add_transaction():
         transaction_type = request.form.get("transaction_type")
         amount = request.form.get("amount")
         transaction_date = request.form.get("transaction_date")
-        note = request.form.get("note", "").strip()
+        note = request.form.get("note")
+
+        if transaction_type not in ["jama", "payout"]:
+
+            cur.close()
+            conn.close()
+
+            return "Invalid transaction type"
 
         cur.execute("""
             INSERT INTO fsc_transactions
@@ -1315,6 +1236,7 @@ def add_transaction():
                 transaction_date,
                 note
             )
+
             VALUES (%s, %s, %s, %s, %s)
         """, (
             member_id,
@@ -1334,175 +1256,156 @@ def add_transaction():
     cur.close()
     conn.close()
 
-    today = datetime.now().strftime("%Y-%m-%d")
-
     html = """
-    <!DOCTYPE html>
-    <html>
 
-    <head>
+<!DOCTYPE html>
 
-        <title>Record Transaction</title>
+<html>
 
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
+<head>
 
-        <style>
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
 
-            body {
-                font-family: Arial;
-                background: #f1f5f9;
-            }
+<title>Add Transaction</title>
 
-            .container {
-                width: 92%;
-                max-width: 500px;
-                margin: 30px auto;
-            }
+<style>
 
-            .card {
-                background: white;
-                padding: 25px;
-                border-radius: 15px;
-            }
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
 
-            input, select, textarea {
-                width: 100%;
-                box-sizing: border-box;
-                padding: 12px;
-                margin: 7px 0 15px;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-            }
+.box {
+    width: 94%;
+    max-width: 500px;
+    margin: 30px auto;
+    background: white;
+    padding: 25px;
+    border-radius: 14px;
+}
 
-            button {
-                width: 100%;
-                padding: 12px;
-                background: #2563eb;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 16px;
-            }
+input,
+select,
+textarea {
 
-        </style>
+    width: 100%;
+    padding: 12px;
+    margin: 8px 0;
+    box-sizing: border-box;
 
-    </head>
+}
 
-    <body>
+button {
 
-    <div class="container">
+    width: 100%;
+    padding: 12px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 8px;
 
-        <div class="card">
+}
 
-            <h2>
-                📤 Record Transaction
-            </h2>
+</style>
 
-            <form method="POST">
+</head>
 
-                <label>
-                    Member / सदस्य
-                </label>
+<body>
 
-                <select
-                    name="member_id"
-                    required
-                >
+<div class="box">
 
-                    <option value="">
-                        Select Member
-                    </option>
+<h1>💰 Record Transaction</h1>
 
-                    {% for member in members %}
+<form method="POST">
 
-                    <option value="{{ member['id'] }}">
-                        {{ member['name'] }}
-                    </option>
+<label>Member</label>
 
-                    {% endfor %}
+<select name="member_id" required>
 
-                </select>
+<option value="">
+Select Member
+</option>
+
+{% for m in members %}
+
+<option value="{{ m["id"] }}">
+{{ m["name"] }}
+</option>
+
+{% endfor %}
+
+</select>
 
 
-                <label>
-                    Type / प्रकार
-                </label>
+<label>Transaction Type</label>
 
-                <select
-                    name="transaction_type"
-                    required
-                >
+<select name="transaction_type" required>
 
-                    <option value="jama">
-                        📥 Jama / Savings Deposit
-                    </option>
+<option value="jama">
+Jama / Deposit
+</option>
 
-                    <option value="payout">
-                        📤 Payout / Member Withdrawal
-                    </option>
+<option value="payout">
+Payout / Money Taken
+</option>
 
-                </select>
+</select>
 
 
-                <label>
-                    Amount / राशि
-                </label>
-
-                <input
-                    type="number"
-                    step="0.01"
-                    name="amount"
-                    required
-                >
+<input
+type="number"
+step="0.01"
+name="amount"
+placeholder="Amount"
+required
+>
 
 
-                <label>
-                    Date / तारीख
-                </label>
-
-                <input
-                    type="date"
-                    name="transaction_date"
-                    value="{{ today }}"
-                    required
-                >
+<input
+type="date"
+name="transaction_date"
+value="{{ today }}"
+required
+>
 
 
-                <label>
-                    Note / विवरण
-                </label>
-
-                <textarea
-                    name="note"
-                    rows="3"
-                ></textarea>
+<textarea
+name="note"
+placeholder="Note"
+></textarea>
 
 
-                <button type="submit">
-                    Save Transaction
-                </button>
+<button type="submit">
+Save Transaction
+</button>
 
-            </form>
+</form>
 
-        </div>
+<p>
+<a href="/dashboard">
+⬅ Dashboard
+</a>
+</p>
 
-    </div>
+</div>
 
-    </body>
-    </html>
-    """
+</body>
+
+</html>
+
+"""
 
     return render_template_string(
         html,
         members=members,
-        today=today
+        today=datetime.now().strftime("%Y-%m-%d")
     )
 
 
-# =========================================================
-# TRANSACTION HISTORY - ADMIN
-# =========================================================
+# =========================
+# TRANSACTION HISTORY
+# =========================
 
 @app.route("/transactions")
 def transactions():
@@ -1510,17 +1413,13 @@ def transactions():
     if not is_admin():
         return redirect(url_for("dashboard"))
 
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
         SELECT
-            t.id,
-            t.transaction_type,
-            t.amount,
-            t.transaction_date,
-            t.note,
-            m.name AS member_name
+            t.*,
+            m.name
 
         FROM fsc_transactions t
 
@@ -1538,139 +1437,140 @@ def transactions():
     conn.close()
 
     html = """
-    <!DOCTYPE html>
-    <html>
 
-    <head>
+<!DOCTYPE html>
 
-        <title>Transaction History</title>
+<html>
 
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
+<head>
 
-        <style>
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
 
-            body {
-                font-family: Arial;
-                background: #f1f5f9;
-                margin: 0;
-            }
+<title>Transaction History</title>
 
-            header {
-                background: #1e3a8a;
-                color: white;
-                padding: 18px;
-            }
+<style>
 
-            .container {
-                width: 94%;
-                max-width: 1100px;
-                margin: 20px auto;
-            }
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
 
-            .card {
-                background: white;
-                padding: 15px;
-                border-radius: 12px;
-                margin-bottom: 12px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            }
+.container {
+    width: 96%;
+    max-width: 1100px;
+    margin: 20px auto;
+}
 
-            .jama {
-                color: #15803d;
-                font-weight: bold;
-            }
+.card {
+    background: white;
+    padding: 15px;
+    margin-bottom: 10px;
+    border-radius: 10px;
+}
 
-            .payout {
-                color: #dc2626;
-                font-weight: bold;
-            }
+.jama {
+    color: green;
+    font-weight: bold;
+}
 
-            .delete {
-                color: #dc2626;
-                text-decoration: none;
-            }
+.payout {
+    color: red;
+    font-weight: bold;
+}
 
-        </style>
+.btn {
+    display: inline-block;
+    padding: 8px 12px;
+    background: #667eea;
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    margin: 3px;
+}
 
-    </head>
+.delete {
+    background: #e74c3c;
+}
 
-    <body>
+</style>
 
-    <header>
+</head>
 
-        <h2>
-            📋 Transaction History
-        </h2>
+<body>
 
-        <a href="/dashboard"
-           style="color:white;">
-            Dashboard
-        </a>
+<div class="container">
 
-    </header>
+<h1>📋 Transaction History</h1>
 
-
-    <div class="container">
-
-        {% for t in transactions %}
-
-        <div class="card">
-
-            <h3>
-                {{ t["member_name"] }}
-            </h3>
-
-            {% if t["transaction_type"] == "jama" %}
-
-            <div class="jama">
-                📥 Jama: ₹{{ "%.2f"|format(t["amount"]) }}
-            </div>
-
-            {% else %}
-
-            <div class="payout">
-                📤 Payout: ₹{{ "%.2f"|format(t["amount"]) }}
-            </div>
-
-            {% endif %}
-
-            <p>
-                Date:
-                {{ t["transaction_date"] }}
-            </p>
-
-            <p>
-                Note:
-                {{ t["note"] or "-" }}
-            </p>
-
-        <a href="/edit_transaction/{{ t['id'] }}"
-   style="margin-right:10px;">
-    ✏️ Edit
+<a class="btn" href="/dashboard">
+⬅ Dashboard
 </a>
 
-<a class="delete"
-   href="/delete_transaction/{{ t['id'] }}"
-   onclick="return confirm('Delete this transaction?')">
-    🗑 Delete
+<a class="btn" href="/add_transaction">
+➕ Add Transaction
 </a>
 
-        </div>
+<hr>
 
-        {% else %}
+{% for t in transactions %}
 
-        <div class="card">
-            No transactions found.
-        </div>
+<div class="card">
 
-        {% endfor %}
+<h3>
+{{ t["name"] }}
+</h3>
 
-    </div>
+<p>
+📅 {{ t["transaction_date"] }}
+</p>
 
-    </body>
-    </html>
-    """
+{% if t["transaction_type"] == "jama" %}
+
+<p class="jama">
+➕ Jama: ₹{{ "%.2f"|format(t["amount"]|float) }}
+</p>
+
+{% else %}
+
+<p class="payout">
+➖ Payout: ₹{{ "%.2f"|format(t["amount"]|float) }}
+</p>
+
+{% endif %}
+
+<p>
+📝 {{ t["note"] or "-" }}
+</p>
+
+<a class="btn"
+href="/edit_transaction/{{ t["id"] }}">
+✏ Edit
+</a>
+
+<a class="btn delete"
+href="/delete_transaction/{{ t["id"] }}"
+onclick="return confirm('Delete this transaction?')">
+🗑 Delete
+</a>
+
+</div>
+
+{% else %}
+
+<p>
+No transactions found.
+</p>
+
+{% endfor %}
+
+</div>
+
+</body>
+
+</html>
+
+"""
 
     return render_template_string(
         html,
@@ -1678,170 +1578,219 @@ def transactions():
     )
 
 
-# =========================================================
-# DELETE TRANSACTION
-# =========================================================
+# =========================
+# EDIT TRANSACTION
+# =========================
 
-@app.route("/edit_transaction/<int:transaction_id>", methods=["GET", "POST"])
-def edit_transaction(transaction_id):
+@app.route("/edit_transaction/<int:id>", methods=["GET", "POST"])
+def edit_transaction(id):
 
     if not is_admin():
         return redirect(url_for("dashboard"))
 
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
+    cur.execute("""
+        SELECT *
+        FROM fsc_transactions
+        WHERE id = %s
+    """, (id,))
+
+    transaction = cur.fetchone()
+
+    if not transaction:
+
+        cur.close()
+        conn.close()
+
+        return "Transaction not found"
+
     if request.method == "POST":
-        member_id = request.form.get("member_id")
+
         transaction_type = request.form.get("transaction_type")
         amount = request.form.get("amount")
         transaction_date = request.form.get("transaction_date")
         note = request.form.get("note")
 
-        cur.execute(
-            """
+        cur.execute("""
             UPDATE fsc_transactions
-            SET member_id = %s,
-                transaction_type = %s,
+
+            SET transaction_type = %s,
                 amount = %s,
                 transaction_date = %s,
                 note = %s
+
             WHERE id = %s
-            """,
-            (
-                member_id,
-                transaction_type,
-                amount,
-                transaction_date,
-                note,
-                transaction_id
-            )
-        )
+        """, (
+            transaction_type,
+            amount,
+            transaction_date,
+            note,
+            id
+        ))
 
         conn.commit()
+
         cur.close()
         conn.close()
 
         return redirect(url_for("transactions"))
 
-    cur.execute(
-        """
-        SELECT *
-        FROM fsc_transactions
-        WHERE id = %s
-        """,
-        (transaction_id,)
-    )
-
-    transaction = cur.fetchone()
-
-    cur.execute(
-        """
-        SELECT id, name
-        FROM fsc_members
-        ORDER BY name
-        """
-    )
-
-    members = cur.fetchall()
-
     cur.close()
     conn.close()
 
-    if not transaction:
-        return redirect(url_for("transactions"))
+    html = """
 
-    return render_template_string("""
 <!DOCTYPE html>
+
 <html>
+
 <head>
-    <title>Edit Transaction</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Edit Transaction</title>
+
+<style>
+
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
+
+.box {
+    width: 94%;
+    max-width: 500px;
+    margin: 30px auto;
+    background: white;
+    padding: 25px;
+    border-radius: 14px;
+}
+
+input,
+select,
+textarea {
+
+    width: 100%;
+    padding: 12px;
+    margin: 8px 0;
+    box-sizing: border-box;
+
+}
+
+button {
+
+    width: 100%;
+    padding: 12px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 8px;
+
+}
+
+</style>
+
 </head>
 
-<body style="font-family:Arial; max-width:600px; margin:30px auto; padding:20px;">
+<body>
 
-<h2>✏️ Edit Transaction</h2>
+<div class="box">
+
+<h1>✏ Edit Transaction</h1>
 
 <form method="POST">
 
-<label>Member</label><br>
-<select name="member_id" required style="width:100%; padding:10px; margin-bottom:15px;">
-    {% for member in members %}
-        <option value="{{ member.id }}"
-            {% if member.id == transaction.member_id %}selected{% endif %}>
-            {{ member.name }}
-        </option>
-    {% endfor %}
+<select name="transaction_type">
+
+<option
+value="jama"
+{% if transaction["transaction_type"] == "jama" %}
+selected
+{% endif %}
+>
+Jama
+</option>
+
+<option
+value="payout"
+{% if transaction["transaction_type"] == "payout" %}
+selected
+{% endif %}
+>
+Payout
+</option>
+
 </select>
 
-<label>Transaction Type</label><br>
-<select name="transaction_type" required style="width:100%; padding:10px; margin-bottom:15px;">
-    <option value="jama"
-        {% if transaction.transaction_type == "jama" %}selected{% endif %}>
-        Jama / Savings Deposit
-    </option>
 
-    <option value="payout"
-        {% if transaction.transaction_type == "payout" %}selected{% endif %}>
-        Payout / Member Withdrawal
-    </option>
-</select>
+<input
+type="number"
+step="0.01"
+name="amount"
+value="{{ transaction["amount"] }}"
+required
+>
 
-<label>Amount</label><br>
-<input type="number"
-       name="amount"
-       value="{{ transaction.amount }}"
-       step="0.01"
-       min="0"
-       required
-       style="width:100%; padding:10px; margin-bottom:15px;">
 
-<label>Date</label><br>
-<input type="date"
-       name="transaction_date"
-       value="{{ transaction.transaction_date }}"
-       required
-       style="width:100%; padding:10px; margin-bottom:15px;">
+<input
+type="date"
+name="transaction_date"
+value="{{ transaction["transaction_date"] }}"
+required
+>
 
-<label>Note</label><br>
-<input type="text"
-       name="note"
-       value="{{ transaction.note or '' }}"
-       style="width:100%; padding:10px; margin-bottom:20px;">
 
-<button type="submit"
-        style="padding:12px 20px; cursor:pointer;">
-    💾 Update Transaction
+<textarea
+name="note"
+>{{ transaction["note"] or "" }}</textarea>
+
+
+<button type="submit">
+Update Transaction
 </button>
 
 </form>
 
-<br>
+<p>
+<a href="/transactions">
+⬅ Back
+</a>
+</p>
 
-<a href="{{ url_for('transactions') }}">⬅️ Back to Transaction History</a>
+</div>
 
 </body>
+
 </html>
-""", transaction=transaction, members=members)
+
+"""
+
+    return render_template_string(
+        html,
+        transaction=transaction
+    )
 
 
-@app.route("/delete_transaction/<int:transaction_id>")
-def delete_transaction(transaction_id):
+# =========================
+# DELETE TRANSACTION
+# =========================
+
+@app.route("/delete_transaction/<int:id>")
+def delete_transaction(id):
 
     if not is_admin():
         return redirect(url_for("dashboard"))
 
-    conn = get_db()
+    conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute(
-        """
+    cur.execute("""
         DELETE FROM fsc_transactions
         WHERE id = %s
-        """,
-        (transaction_id,)
-    )
+    """, (id,))
 
     conn.commit()
 
@@ -1851,9 +1800,9 @@ def delete_transaction(transaction_id):
     return redirect(url_for("transactions"))
 
 
-# =========================================================
-# MEMBER TRANSACTIONS
-# =========================================================
+# =========================
+# MY TRANSACTIONS
+# =========================
 
 @app.route("/my_transactions")
 def my_transactions():
@@ -1863,618 +1812,33 @@ def my_transactions():
     if not user:
         return redirect(url_for("login"))
 
-    conn = get_db()
+    member = get_member_for_user()
+
+    if not member:
+        return redirect(url_for("dashboard"))
+
+    conn = get_conn()
     cur = conn.cursor()
 
-    # ==========================================
-    # MEMBER-WISE SUMMARY
-    # ==========================================
-
     cur.execute("""
         SELECT
-            m.id,
-            m.name,
-
-            COALESCE(
-                SUM(
-                    CASE
-                        WHEN t.transaction_type = 'jama'
-                        THEN t.amount
-                        ELSE 0
-                    END
-                ), 0
-            ) AS total_jama,
-
-            COALESCE(
-                SUM(
-                    CASE
-                        WHEN t.transaction_type = 'payout'
-                        THEN t.amount
-                        ELSE 0
-                    END
-                ), 0
-            ) AS total_payout
-
-        FROM fsc_members m
-
-        LEFT JOIN fsc_transactions t
-            ON m.id = t.member_id
-
-        GROUP BY
-            m.id,
-            m.name
-
-        ORDER BY
-            m.name
-    """)
-
-    members = cur.fetchall()
-
-
-    # ==========================================
-    # ALL TRANSACTIONS
-    # ==========================================
-
-    cur.execute("""
-        SELECT
-            t.id,
-            m.name AS member_name,
-            t.transaction_type,
-            t.amount,
-            t.transaction_date,
-            t.note
+            t.*
 
         FROM fsc_transactions t
 
-        JOIN fsc_members m
-            ON m.id = t.member_id
+        WHERE t.member_id = %s
 
         ORDER BY
             t.transaction_date DESC,
             t.id DESC
-    """)
+    """, (member["id"],))
 
     transactions = cur.fetchall()
 
-
-    # ==========================================
-    # OVERALL TOTAL
-    # ==========================================
-
-    cur.close()
-    conn.close()
-
-
-    total_jama = sum(
-    float(m["total_jama"])
-    for m in members
-)
-
-total_payout = sum(
-    float(m["total_payout"])
-    for m in members
-)
-
-balance = total_jama - total_payout
-
-
-# Total Baaki:
-# Sirf un members ka jinhone payout liya hai
-total_baaki = sum(
-    max(
-        float(m["total_jama"]) - float(m["total_payout"]),
-        0
-    )
-    for m in members
-    if float(m["total_payout"]) > 0
-)
-
-
-# Total Wapas:
-# Sirf un members ka jinhone jama se zyada liya hai
-total_wapas = sum(
-    max(
-        float(m["total_payout"]) - float(m["total_jama"]),
-        0
-    )
-    for m in members
-    if float(m["total_payout"]) > float(m["total_jama"])
-    )
-
-
-    # ==========================================
-    # HTML
-    # ==========================================
-
-    html = """
-    <!DOCTYPE html>
-    <html>
-
-    <head>
-
-        <title>All Members Transactions</title>
-
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
-
-        <style>
-
-            body {
-                font-family: Arial;
-                background: #f1f5f9;
-                margin: 0;
-            }
-
-            header {
-                background: #1e3a8a;
-                color: white;
-                padding: 18px;
-            }
-
-            header h2 {
-                margin: 0 0 8px 0;
-            }
-
-            .container {
-                width: 94%;
-                max-width: 1100px;
-                margin: 20px auto;
-            }
-
-            .summary {
-                display: grid;
-                grid-template-columns:
-                    repeat(auto-fit, minmax(180px, 1fr));
-                gap: 12px;
-            }
-
-            .card {
-                background: white;
-                padding: 15px;
-                border-radius: 12px;
-                margin-bottom: 12px;
-                box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-            }
-
-            .summary .card {
-                padding: 18px;
-            }
-
-            .card h2 {
-                margin: 8px 0 0 0;
-            }
-
-            .green {
-                color: #15803d;
-            }
-
-            .red {
-                color: #dc2626;
-            }
-
-            .blue {
-                color: #2563eb;
-            }
-
-            .orange {
-                color: #ea580c;
-            }
-
-            .gray {
-                color: #475569;
-            }
-
-            table {
-                width: 100%;
-                border-collapse: collapse;
-                background: white;
-                border-radius: 10px;
-                overflow: hidden;
-            }
-
-            th, td {
-                padding: 10px;
-                border-bottom: 1px solid #e5e7eb;
-                text-align: left;
-            }
-
-            th {
-                background: #e2e8f0;
-            }
-
-            .table-container {
-                overflow-x: auto;
-            }
-
-            @media(max-width:700px) {
-
-                table {
-                    font-size: 13px;
-                }
-
-                th, td {
-                    padding: 7px;
-                }
-
-            }
-
-        </style>
-
-    </head>
-
-
-    <body>
-
-
-    <header>
-
-        <h2>
-            👥 All Members Transactions
-        </h2>
-
-        <a href="/dashboard"
-           style="color:white;">
-            🏠 Dashboard
-        </a>
-
-    </header>
-
-
-    <div class="container">
-
-
-        <!-- ================================= -->
-        <!-- OVERALL TOTAL -->
-        <!-- ================================= -->
-
-        <h2>
-            📊 Overall Total / अब तक का पूरा हिसाब
-        </h2>
-
-
-        <div class="summary">
-
-
-            <div class="card green">
-
-                <b>
-                    📥 Total Jama
-                </b>
-
-                <h2>
-                    ₹{{ "%.2f"|format(total_jama) }}
-                </h2>
-
-            </div>
-
-
-            <div class="card red">
-
-                <b>
-                    📤 Total Payout
-                </b>
-
-                <h2>
-                    ₹{{ "%.2f"|format(total_payout) }}
-                </h2>
-
-            </div>
-
-
-            <div class="card blue">
-
-                <b>
-                    💰 Balance
-                </b>
-
-                <h2>
-                    ₹{{ "%.2f"|format(balance) }}
-                </h2>
-
-            </div>
-
-
-            <div class="card blue">
-
-                <b>
-                    📌 Total Baaki
-                </b>
-
-                <h2>
-                    ₹{{ "%.2f"|format(total_baaki) }}
-                </h2>
-
-            </div>
-
-
-            <div class="card orange">
-
-                <b>
-                    🔄 Total Wapas Karna Hai
-                </b>
-
-                <h2>
-                    ₹{{ "%.2f"|format(total_wapas) }}
-                </h2>
-
-            </div>
-
-
-        </div>
-
-
-        <!-- ================================= -->
-        <!-- MEMBER-WISE SUMMARY -->
-        <!-- ================================= -->
-
-        <h2>
-            👥 Member-wise Summary
-        </h2>
-
-
-        {% for m in members %}
-
-
-        {% set member_jama =
-            m["total_jama"]|float
-        %}
-
-
-        {% set member_payout =
-            m["total_payout"]|float
-        %}
-
-
-        {% set member_balance =
-            member_jama - member_payout
-        %}
-
-
-        {% set member_baaki =
-            member_jama - member_payout
-        %}
-
-
-        {% set member_wapas =
-            member_payout - member_jama
-        %}
-
-
-        <div class="card">
-
-            <h3>
-                👤 {{ m["name"] }}
-            </h3>
-
-
-            <p class="green">
-
-                📥 Total Jama:
-
-                <b>
-                    ₹{{ "%.2f"|format(member_jama) }}
-                </b>
-
-            </p>
-
-
-            <p class="red">
-
-                📤 Total Payout / Liya:
-
-                <b>
-                    ₹{{ "%.2f"|format(member_payout) }}
-                </b>
-
-            </p>
-
-
-            <p class="blue">
-
-                💰 Balance:
-
-                <b>
-                    ₹{{ "%.2f"|format(member_balance) }}
-                </b>
-
-            </p>
-
-
-            <p class="blue">
-
-                📌 Baaki:
-
-                <b>
-                    ₹{{ "%.2f"|format(
-                        member_baaki
-                        if member_baaki > 0
-                        else 0
-                    ) }}
-                </b>
-
-            </p>
-
-
-            <p class="orange">
-
-                🔄 Wapas Karna Hai:
-
-                <b>
-                    ₹{{ "%.2f"|format(
-                        member_wapas
-                        if member_wapas > 0
-                        else 0
-                    ) }}
-                </b>
-
-            </p>
-
-
-        </div>
-
-
-        {% endfor %}
-
-
-        <!-- ================================= -->
-        <!-- TRANSACTION HISTORY -->
-        <!-- ================================= -->
-
-        <h2>
-            📋 Complete Transaction History
-        </h2>
-
-
-        <div class="table-container">
-
-        <table>
-
-
-            <tr>
-
-                <th>
-                    Member
-                </th>
-
-                <th>
-                    Type
-                </th>
-
-                <th>
-                    Amount
-                </th>
-
-                <th>
-                    Date
-                </th>
-
-                <th>
-                    Note
-                </th>
-
-            </tr>
-
-
-            {% for t in transactions %}
-
-
-            <tr>
-
-
-                <td>
-                    {{ t["member_name"] }}
-                </td>
-
-
-                <td>
-
-                    {% if t["transaction_type"] == "jama" %}
-
-                    <span class="green">
-                        📥 Jama
-                    </span>
-
-                    {% else %}
-
-                    <span class="red">
-                        📤 Payout
-                    </span>
-
-                    {% endif %}
-
-                </td>
-
-
-                <td>
-                    ₹{{ "%.2f"|format(t["amount"]|float) }}
-                </td>
-
-
-                <td>
-                    {{ t["transaction_date"] }}
-                </td>
-
-
-                <td>
-                    {{ t["note"] or "-" }}
-                </td>
-
-
-            </tr>
-
-
-            {% else %}
-
-
-            <tr>
-
-                <td colspan="5">
-                    No transactions found.
-                </td>
-
-            </tr>
-
-
-            {% endfor %}
-
-
-        </table>
-
-        </div>
-
-
-    </div>
-
-    </body>
-
-    </html>
-    """
-
-
-    return render_template_string(
-
-        html,
-
-        members=members,
-
-        transactions=transactions,
-
-        total_jama=total_jama,
-
-        total_payout=total_payout,
-
-        balance=balance,
-
-        total_baaki=total_baaki,
-
-        total_wapas=total_wapas
-
-    )
-
-# =========================================================
-# REPORT
-# =========================================================
-
-@app.route("/report", methods=["GET", "POST"])
-def report():
-
-    user = current_user()
-
-    if not user:
-        return redirect(url_for("login"))
-
-    from_date = request.form.get("from_date", "")
-    to_date = request.form.get("to_date", "")
-
-    # ==========================================
-    # OVERALL TOTAL - AB TAK KA POORA HISAB
-    # ==========================================
-
-    conn = get_db()
-    cur = conn.cursor()
-
+    # Member total
     cur.execute("""
         SELECT
+
             COALESCE(
                 SUM(
                     CASE
@@ -2496,43 +1860,277 @@ def report():
             ) AS total_payout
 
         FROM fsc_transactions
-    """)
 
-    overall = cur.fetchone()
+        WHERE member_id = %s
+    """, (member["id"],))
 
-    overall_jama = float(overall["total_jama"])
-    overall_payout = float(overall["total_payout"])
+    totals = cur.fetchone()
 
-    overall_balance = overall_jama - overall_payout
+    total_jama = float(totals["total_jama"])
+    total_payout = float(totals["total_payout"])
 
-    overall_wapas = max(
-        overall_payout - overall_jama,
+    total_amount = total_jama - total_payout
+
+    if total_payout > 0:
+        total_baaki = max(
+            total_jama - total_payout,
+            0
+        )
+    else:
+        total_baaki = 0
+
+    total_wapas = max(
+        total_payout - total_jama,
         0
     )
 
     cur.close()
     conn.close()
 
+    html = """
 
-    # ==========================================
-    # DATE-WISE REPORT
-    # ==========================================
+<!DOCTYPE html>
 
-    report_data = []
+<html>
 
-    totals = {
-    "jama": 0,
-    "payout": 0,
-    "balance": 0,
-    "baaki": 0,
-    "wapas": 0
-    }
+<head>
 
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>My Transactions</title>
+
+<style>
+
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
+
+.container {
+    width: 94%;
+    max-width: 1000px;
+    margin: 20px auto;
+}
+
+.cards {
+    display: grid;
+    grid-template-columns:
+    repeat(auto-fit,minmax(160px,1fr));
+
+    gap: 12px;
+}
+
+.card {
+    background: white;
+    padding: 18px;
+    border-radius: 12px;
+    box-shadow:
+    0 4px 10px rgba(0,0,0,0.08);
+}
+
+.amount {
+    font-size: 23px;
+    font-weight: bold;
+}
+
+.transaction {
+    background: white;
+    padding: 15px;
+    margin-top: 10px;
+    border-radius: 10px;
+}
+
+.jama {
+    color: green;
+}
+
+.payout {
+    color: red;
+}
+
+.blue {
+    color: #1565c0;
+}
+
+.orange {
+    color: #e65100;
+}
+
+.btn {
+    display: inline-block;
+    padding: 9px 13px;
+    background: #667eea;
+    color: white;
+    text-decoration: none;
+    border-radius: 7px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>
+📋 {{ member["name"] }} - Transactions
+</h1>
+
+<a class="btn"
+href="/dashboard">
+⬅ Dashboard
+</a>
+
+<br><br>
+
+
+<div class="cards">
+
+<div class="card">
+
+<h3>💵 Total Jama</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(total_jama) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>💸 Total Payout</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(total_payout) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>💰 Total Amount / Balance</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(total_amount) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>📌 Baaki</h3>
+
+<div class="amount blue">
+₹{{ "%.2f"|format(total_baaki) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>🔄 Wapas Karna Hai</h3>
+
+<div class="amount orange">
+₹{{ "%.2f"|format(total_wapas) }}
+</div>
+
+</div>
+
+</div>
+
+
+<h2>
+Transaction History
+</h2>
+
+
+{% for t in transactions %}
+
+<div class="transaction">
+
+<p>
+📅 {{ t["transaction_date"] }}
+</p>
+
+{% if t["transaction_type"] == "jama" %}
+
+<p class="jama">
+➕ Jama:
+<b>
+₹{{ "%.2f"|format(t["amount"]|float) }}
+</b>
+</p>
+
+{% else %}
+
+<p class="payout">
+➖ Payout:
+<b>
+₹{{ "%.2f"|format(t["amount"]|float) }}
+</b>
+</p>
+
+{% endif %}
+
+<p>
+📝 {{ t["note"] or "-" }}
+</p>
+
+</div>
+
+{% else %}
+
+<p>
+No transactions found.
+</p>
+
+{% endfor %}
+
+</div>
+
+</body>
+
+</html>
+
+"""
+
+    return render_template_string(
+        html,
+        member=member,
+        transactions=transactions,
+        total_jama=total_jama,
+        total_payout=total_payout,
+        total_amount=total_amount,
+        total_baaki=total_baaki,
+        total_wapas=total_wapas
+    )
+
+
+# =========================
+# REPORT
+# =========================
+
+@app.route("/report")
+def report():
+
+    user = current_user()
+
+    if not user:
+        return redirect(url_for("login"))
+
+    from_date = request.args.get("from_date")
+    to_date = request.args.get("to_date")
+
+    conn = get_conn()
+    cur = conn.cursor()
 
     if from_date and to_date:
-
-        conn = get_db()
-        cur = conn.cursor()
 
         cur.execute("""
             SELECT
@@ -2562,572 +2160,666 @@ def report():
             FROM fsc_members m
 
             LEFT JOIN fsc_transactions t
-                ON m.id = t.member_id
-
-                AND t.transaction_date
+            ON m.id = t.member_id
+            AND t.transaction_date
                 BETWEEN %s AND %s
 
-            GROUP BY
-                m.id,
-                m.name
+            GROUP BY m.id, m.name
 
-            ORDER BY
-                m.name
+            ORDER BY m.name
         """, (
             from_date,
             to_date
         ))
 
-        rows = cur.fetchall()
+    else:
 
-        for row in rows:
+        cur.execute("""
+            SELECT
+                m.id,
+                m.name,
 
-            jama = float(row["jama"])
-            payout = float(row["payout"])
+                COALESCE(
+                    SUM(
+                        CASE
+                            WHEN t.transaction_type = 'jama'
+                            THEN t.amount
+                            ELSE 0
+                        END
+                    ), 0
+                ) AS jama,
 
-            balance = jama - payout
+                COALESCE(
+                    SUM(
+                        CASE
+                            WHEN t.transaction_type = 'payout'
+                            THEN t.amount
+                            ELSE 0
+                        END
+                    ), 0
+                ) AS payout
 
-            wapas = max(
-                payout - jama,
+            FROM fsc_members m
+
+            LEFT JOIN fsc_transactions t
+            ON m.id = t.member_id
+
+            GROUP BY m.id, m.name
+
+            ORDER BY m.name
+        """)
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    report_data = []
+
+    total_jama = 0
+    total_payout = 0
+    total_baaki = 0
+    total_wapas = 0
+
+    for row in rows:
+
+        jama = float(row["jama"])
+        payout = float(row["payout"])
+
+        balance = jama - payout
+
+        # Baaki rule:
+        # payout must be greater than 0
+        if payout > 0:
+            baaki = max(
+                jama - payout,
                 0
             )
+        else:
+            baaki = 0
 
-            report_data.append({
-                "name": row["name"],
-                "jama": jama,
-                "payout": payout,
-                "balance": balance,
-                "wapas": wapas
-            })
-
-            totals["jama"] += jama
-            totals["payout"] += payout
-
-        totals["balance"] = (
-            totals["jama"]
-            -
-            totals["payout"]
-        )
-
-        totals["wapas"] = max(
-            totals["payout"]
-            -
-            totals["jama"],
+        wapas = max(
+            payout - jama,
             0
         )
 
-        cur.close()
-        conn.close()
+        total_jama += jama
+        total_payout += payout
+        total_baaki += baaki
+        total_wapas += wapas
 
+        report_data.append({
+            "name": row["name"],
+            "jama": jama,
+            "payout": payout,
+            "balance": balance,
+            "baaki": baaki,
+            "wapas": wapas
+        })
 
-    # ==========================================
-    # HTML
-    # ==========================================
+    total_amount = total_jama - total_payout
 
     html = """
-    <!DOCTYPE html>
-    <html>
-
-    <head>
-
-        <title>Friend Saving Club - Report</title>
-
-        <meta name="viewport"
-              content="width=device-width, initial-scale=1">
-
-        <style>
-
-            body {
-                font-family: Arial;
-                background: #f1f5f9;
-                margin: 0;
-            }
-
-            header {
-                background: #1e3a8a;
-                color: white;
-                padding: 18px;
-            }
-
-            header h2 {
-                margin: 0 0 8px 0;
-            }
-
-            .container {
-                width: 94%;
-                max-width: 1100px;
-                margin: 20px auto;
-            }
-
-            .card {
-                background: white;
-                padding: 18px;
-                border-radius: 12px;
-                margin-bottom: 15px;
-                box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-            }
-
-            .overall {
-                border-left: 5px solid #1e3a8a;
-            }
-
-            .summary {
-                display: grid;
-                grid-template-columns:
-                    repeat(auto-fit, minmax(190px, 1fr));
-                gap: 12px;
-            }
-
-            .summary-card {
-                background: white;
-                padding: 15px;
-                border-radius: 12px;
-                box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-            }
-
-            .summary-card h3 {
-                margin: 5px 0;
-                font-size: 25px;
-            }
-
-            input {
-                padding: 10px;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                margin: 5px;
-            }
-
-            button {
-                padding: 11px 18px;
-                background: #2563eb;
-                color: white;
-                border: none;
-                border-radius: 8px;
-                cursor: pointer;
-                font-weight: bold;
-            }
 
-            button:hover {
-                background: #1d4ed8;
-            }
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Report</title>
+
+<style>
+
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
+
+.container {
+    width: 96%;
+    max-width: 1200px;
+    margin: 20px auto;
+}
+
+.filter {
+    background: white;
+    padding: 18px;
+    border-radius: 12px;
+    margin-bottom: 15px;
+}
+
+input {
+    padding: 10px;
+    margin: 5px;
+}
+
+button {
+    padding: 10px 15px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 7px;
+}
+
+.cards {
+    display: grid;
+    grid-template-columns:
+    repeat(auto-fit,minmax(160px,1fr));
+    gap: 12px;
+}
+
+.card {
+    background: white;
+    padding: 18px;
+    border-radius: 12px;
+    box-shadow:
+    0 4px 10px rgba(0,0,0,0.08);
+}
 
-            table {
-                width: 100%;
-                border-collapse: collapse;
-                background: white;
-            }
+.amount {
+    font-size: 22px;
+    font-weight: bold;
+}
 
-            th, td {
-                padding: 10px;
-                border-bottom: 1px solid #e2e8f0;
-                text-align: left;
-            }
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    margin-top: 20px;
+}
 
-            th {
-                background: #e2e8f0;
-            }
+th,
+td {
+    padding: 12px;
+    border: 1px solid #ddd;
+    text-align: center;
+}
 
-            .green {
-                color: #15803d;
-            }
+th {
+    background: #667eea;
+    color: white;
+}
 
-            .red {
-                color: #dc2626;
-            }
+.baaki {
+    color: #1565c0;
+    font-weight: bold;
+}
 
-            .blue {
-                color: #2563eb;
-            }
+.wapas {
+    color: #e65100;
+    font-weight: bold;
+}
 
-            .orange {
-                color: #ea580c;
-            }
+.btn {
+    display: inline-block;
+    padding: 9px 13px;
+    background: #555;
+    color: white;
+    text-decoration: none;
+    border-radius: 7px;
+}
 
-            .table-container {
-                overflow-x: auto;
-            }
+</style>
 
-            .period-title {
-                color: #1e3a8a;
-            }
+</head>
 
-            @media(max-width:700px) {
+<body>
 
-                table {
-                    font-size: 13px;
-                }
+<div class="container">
 
-                th, td {
-                    padding: 7px;
-                }
+<h1>
+📊 Friend Saving Club Report
+</h1>
 
-                input {
-                    width: 90%;
-                    margin: 5px 0;
-                }
+<a class="btn"
+href="/dashboard">
+⬅ Dashboard
+</a>
 
-                button {
-                    margin-top: 8px;
-                    width: 95%;
-                }
 
-            }
+<div class="filter">
 
-        </style>
+<form method="GET">
 
-    </head>
+<label>
+From:
+</label>
 
+<input
+type="date"
+name="from_date"
+value="{{ from_date or '' }}"
+required
+>
 
-    <body>
 
+<label>
+To:
+</label>
 
-    <header>
+<input
+type="date"
+name="to_date"
+value="{{ to_date or '' }}"
+required
+>
 
-        <h2>
-            📊 Friend Saving Club Report
-        </h2>
 
-        <a href="/dashboard"
-           style="color:white;">
-            🏠 Dashboard
-        </a>
+<button type="submit">
+🔍 Generate Report
+</button>
 
-    </header>
+</form>
 
+</div>
 
-    <div class="container">
 
+<div class="cards">
 
-        <!-- ================================= -->
-        <!-- OVERALL TOTAL -->
-        <!-- ================================= -->
+<div class="card">
 
-        <div class="card overall">
+<h3>
+💵 Total Jama
+</h3>
 
-            <h2>
-                📌 Overall Total / अब तक का पूरा हिसाब
-            </h2>
+<div class="amount">
+₹{{ "%.2f"|format(total_jama) }}
+</div>
 
-            <div class="summary">
+</div>
 
 
-                <div class="summary-card">
+<div class="card">
 
-                    <div class="green">
-                        📥 Total Jama
-                    </div>
+<h3>
+💸 Total Payout
+</h3>
 
-                    <h3 class="green">
-                        ₹{{ "%.2f"|format(overall_jama) }}
-                    </h3>
+<div class="amount">
+₹{{ "%.2f"|format(total_payout) }}
+</div>
 
-                </div>
+</div>
 
 
-                <div class="summary-card">
+<div class="card">
 
-                    <div class="red">
-                        📤 Total Payout
-                    </div>
+<h3>
+💰 Total Amount / Balance
+</h3>
 
-                    <h3 class="red">
-                        ₹{{ "%.2f"|format(overall_payout) }}
-                    </h3>
+<div class="amount">
+₹{{ "%.2f"|format(total_amount) }}
+</div>
 
-                </div>
+</div>
 
 
-                <div class="summary-card">
+<div class="card">
 
-                    <div class="blue">
-                        💰 Current Balance
-                    </div>
+<h3>
+📌 Total Baaki
+</h3>
 
-                    <h3 class="blue">
-                        ₹{{ "%.2f"|format(overall_balance) }}
-                    </h3>
+<div class="amount baaki">
+₹{{ "%.2f"|format(total_baaki) }}
+</div>
 
-                </div>
+</div>
 
 
-                <div class="summary-card">
+<div class="card">
 
-                    <div class="orange">
-                        🔄 Wapas Karna Hai
-                    </div>
+<h3>
+🔄 Total Wapas
+</h3>
 
-                    <h3 class="orange">
-                        ₹{{ "%.2f"|format(overall_wapas) }}
-                    </h3>
+<div class="amount wapas">
+₹{{ "%.2f"|format(total_wapas) }}
+</div>
 
-                </div>
+</div>
 
+</div>
 
-            </div>
 
-        </div>
+<h2>
+Member-wise Report
+</h2>
 
 
-        <!-- ================================= -->
-        <!-- DATE RANGE -->
-        <!-- ================================= -->
+<div style="overflow-x:auto;">
 
-        <div class="card">
+<table>
 
-            <h3>
-                📅 Date-wise Report / तारीख अनुसार रिपोर्ट
-            </h3>
+<tr>
 
-            <form method="POST">
+<th>
+Member
+</th>
 
+<th>
+Jama
+</th>
 
-                <label>
-                    <b>From Date:</b>
-                </label>
+<th>
+Payout
+</th>
 
-                <input
-                    type="date"
-                    name="from_date"
-                    value="{{ from_date }}"
-                    required
-                >
+<th>
+Balance
+</th>
 
+<th>
+Baaki
+</th>
 
-                <br>
+<th>
+Wapas
+</th>
 
+</tr>
 
-                <label>
-                    <b>To Date:</b>
-                </label>
 
-                <input
-                    type="date"
-                    name="to_date"
-                    value="{{ to_date }}"
-                    required
-                >
+{% for r in report_data %}
 
+<tr>
 
-                <br>
+<td>
+{{ r["name"] }}
+</td>
 
+<td>
+₹{{ "%.2f"|format(r["jama"]) }}
+</td>
 
-                <button type="submit">
-                    📊 Generate Report
-                </button>
+<td>
+₹{{ "%.2f"|format(r["payout"]) }}
+</td>
 
-            </form>
+<td>
+₹{{ "%.2f"|format(r["balance"]) }}
+</td>
 
-        </div>
+<td class="baaki">
 
+₹{{ "%.2f"|format(r["baaki"]) }}
 
-        <!-- ================================= -->
-        <!-- SELECTED PERIOD SUMMARY -->
-        <!-- ================================= -->
+</td>
 
-        {% if from_date and to_date %}
+<td class="wapas">
 
-        <div class="card">
+₹{{ "%.2f"|format(r["wapas"]) }}
 
-            <h3 class="period-title">
+</td>
 
-                📅 Selected Period
+</tr>
 
-                <br>
+{% else %}
 
-                {{ from_date }}
-                →
-                {{ to_date }}
+<tr>
 
-            </h3>
+<td colspan="6">
+No data found.
+</td>
 
+</tr>
 
-            <p class="green">
+{% endfor %}
 
-                📥 Total Jama:
+</table>
 
-                <b>
-                    ₹{{ "%.2f"|format(totals["jama"]) }}
-                </b>
+</div>
 
-            </p>
+</div>
 
+</body>
 
-            <p class="red">
+</html>
 
-                📤 Total Payout:
-
-                <b>
-                    ₹{{ "%.2f"|format(totals["payout"]) }}
-                </b>
-
-            </p>
-
-
-            <p class="blue">
-
-                💰 Group Balance:
-
-                <b>
-                    ₹{{ "%.2f"|format(totals["balance"]) }}
-                </b>
-
-            </p>
-
-
-            <p class="orange">
-
-                🔄 Wapas Karna Hai:
-
-                <b>
-                    ₹{{ "%.2f"|format(totals["wapas"]) }}
-                </b>
-
-            </p>
-
-        </div>
-
-
-        <!-- ================================= -->
-        <!-- MEMBER-WISE REPORT -->
-        <!-- ================================= -->
-
-        <div class="card">
-
-            <h3>
-                👥 Member-wise Summary
-            </h3>
-
-
-            {% if report_data %}
-
-            <div class="table-container">
-
-            <table>
-
-                <tr>
-
-                    <th>
-                        Member
-                    </th>
-
-                    <th>
-                        Jama
-                    </th>
-
-                    <th>
-                        Payout
-                    </th>
-
-                    <th>
-                        Balance
-                    </th>
-
-                    <th>
-                        Wapas Karna Hai
-                    </th>
-
-                </tr>
-
-
-                {% for r in report_data %}
-
-                <tr>
-
-                    <td>
-                        👤 {{ r["name"] }}
-                    </td>
-
-
-                    <td class="green">
-
-                        ₹{{ "%.2f"|format(r["jama"]) }}
-
-                    </td>
-
-
-                    <td class="red">
-
-                        ₹{{ "%.2f"|format(r["payout"]) }}
-
-                    </td>
-
-
-                    <td class="blue">
-
-                        ₹{{ "%.2f"|format(r["balance"]) }}
-
-                    </td>
-
-
-                    <td class="orange">
-
-                        ₹{{ "%.2f"|format(r["wapas"]) }}
-
-                    </td>
-
-                </tr>
-
-                {% endfor %}
-
-            </table>
-
-            </div>
-
-
-            {% else %}
-
-            <p>
-                No records found for this period.
-            </p>
-
-            {% endif %}
-
-        </div>
-
-        {% endif %}
-
-
-    </div>
-
-
-    </body>
-
-    </html>
-    """
-
+"""
 
     return render_template_string(
         html,
-
-        overall_jama=overall_jama,
-        overall_payout=overall_payout,
-        overall_balance=overall_balance,
-        overall_wapas=overall_wapas,
-
         report_data=report_data,
-
-        totals=totals,
-
+        total_jama=total_jama,
+        total_payout=total_payout,
+        total_amount=total_amount,
+        total_baaki=total_baaki,
+        total_wapas=total_wapas,
         from_date=from_date,
         to_date=to_date
     )
 
 
-# =========================================================
-# INITIALIZE DATABASE
-# =========================================================
+# =========================
+# CHANGE PASSWORD
+# =========================
+
+@app.route("/change_password", methods=["GET", "POST"])
+def change_password():
+
+    user = current_user()
+
+    if not user:
+        return redirect(url_for("login"))
+
+    message = None
+    error = None
+
+    if request.method == "POST":
+
+        old_password = request.form.get("old_password")
+        new_password = request.form.get("new_password")
+        confirm_password = request.form.get("confirm_password")
+
+        if not check_password_hash(
+            user["password"],
+            old_password
+        ):
+
+            error = "Old password is incorrect."
+
+        elif new_password != confirm_password:
+
+            error = "New passwords do not match."
+
+        elif len(new_password) < 4:
+
+            error = "Password must be at least 4 characters."
+
+        else:
+
+            conn = get_conn()
+            cur = conn.cursor()
+
+            new_hash = generate_password_hash(
+                new_password
+            )
+
+            cur.execute("""
+                UPDATE fsc_users
+
+                SET password = %s
+
+                WHERE id = %s
+            """, (
+                new_hash,
+                user["id"]
+            ))
+
+            # If member, also update member password
+            if user["member_id"]:
+
+                cur.execute("""
+                    UPDATE fsc_members
+
+                    SET password = %s
+
+                    WHERE id = %s
+                """, (
+                    new_hash,
+                    user["member_id"]
+                ))
+
+            conn.commit()
+
+            cur.close()
+            conn.close()
+
+            message = "Password changed successfully."
+
+    html = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Change Password</title>
+
+<style>
+
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
+
+.box {
+    width: 94%;
+    max-width: 500px;
+    margin: 40px auto;
+    background: white;
+    padding: 25px;
+    border-radius: 14px;
+}
+
+input {
+    width: 100%;
+    padding: 12px;
+    margin: 8px 0;
+    box-sizing: border-box;
+}
+
+button {
+    width: 100%;
+    padding: 12px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 8px;
+}
+
+.success {
+    color: green;
+}
+
+.error {
+    color: red;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="box">
+
+<h1>
+🔐 Change Password
+</h1>
+
+{% if message %}
+
+<p class="success">
+{{ message }}
+</p>
+
+{% endif %}
+
+{% if error %}
+
+<p class="error">
+{{ error }}
+</p>
+
+{% endif %}
+
+<form method="POST">
+
+<input
+type="password"
+name="old_password"
+placeholder="Old Password"
+required
+>
+
+<input
+type="password"
+name="new_password"
+placeholder="New Password"
+required
+>
+
+<input
+type="password"
+name="confirm_password"
+placeholder="Confirm New Password"
+required
+>
+
+<button type="submit">
+Change Password
+</button>
+
+</form>
+
+<p>
+<a href="/dashboard">
+⬅ Back to Dashboard
+</a>
+</p>
+
+</div>
+
+</body>
+
+</html>
+
+"""
+
+    return render_template_string(
+        html,
+        message=message,
+        error=error
+    )
+
+
+# =========================
+# START APP
+# =========================
 
 init_db()
 
 
-# =========================================================
-# RUN LOCAL
-# =========================================================
-
 if __name__ == "__main__":
 
     app.run(
-        debug=False,
-        host="127.0.0.1",
-        port=5000
+        host="0.0.0.0",
+        port=int(
+            os.environ.get(
+                "PORT",
+                5000
+            )
+        ),
+        debug=True
     )

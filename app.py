@@ -375,76 +375,49 @@ def dashboard():
     conn = get_db()
     cur = conn.cursor()
 
-    if user["role"] == "admin":
+    # सभी members का overall total
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN transaction_type = 'jama'
+                        THEN amount
+                        ELSE 0
+                    END
+                ), 0
+            ) AS total_jama,
 
-        cur.execute("""
-            SELECT
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN transaction_type = 'jama'
-                            THEN amount
-                            ELSE 0
-                        END
-                    ), 0
-                ) AS total_jama,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN transaction_type = 'payout'
+                        THEN amount
+                        ELSE 0
+                    END
+                ), 0
+            ) AS total_payout
 
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN transaction_type = 'payout'
-                            THEN amount
-                            ELSE 0
-                        END
-                    ), 0
-                ) AS total_payout
+        FROM fsc_transactions
+    """)
 
-            FROM fsc_transactions
-        """)
+    totals = cur.fetchone()
 
-        totals = cur.fetchone()
+    # Total members
+    cur.execute("""
+        SELECT COUNT(*) AS count
+        FROM fsc_members
+    """)
 
-        cur.execute(
-            "SELECT COUNT(*) AS count FROM fsc_members"
-        )
+    member_count = cur.fetchone()["count"]
 
-        member_count = cur.fetchone()["count"]
+    total_jama = float(totals["total_jama"])
+    total_payout = float(totals["total_payout"])
 
-    else:
+    balance = total_jama - total_payout
 
-        cur.execute("""
-            SELECT
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN transaction_type = 'jama'
-                            THEN amount
-                            ELSE 0
-                        END
-                    ), 0
-                ) AS total_jama,
-
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN transaction_type = 'payout'
-                            THEN amount
-                            ELSE 0
-                        END
-                    ), 0
-                ) AS total_payout
-
-            FROM fsc_transactions
-
-            WHERE member_id = %s
-        """, (user["member_id"],))
-
-        totals = cur.fetchone()
-        member_count = 1
-
-    balance = float(totals["total_jama"]) - float(
-        totals["total_payout"]
-    )
+    # Overall Wapas Karna Hai
+    total_wapas = max(total_payout - total_jama, 0)
 
     cur.close()
     conn.close()
@@ -532,6 +505,10 @@ def dashboard():
                 color: #2563eb;
             }
 
+            .orange {
+                color: #ea580c;
+            }
+
             .links {
                 margin-top: 20px;
             }
@@ -584,6 +561,10 @@ def dashboard():
 
             <a href="/my_transactions">
                 My Transactions
+            </a>
+
+            <a href="/report">
+                📊 Report
             </a>
 
             {% endif %}
@@ -647,6 +628,19 @@ def dashboard():
             <div class="card">
 
                 <div class="title">
+                    🔄 Wapas Karna Hai / वापस करना है
+                </div>
+
+                <div class="value orange">
+                    ₹{{ "%.2f"|format(total_wapas) }}
+                </div>
+
+            </div>
+
+
+            <div class="card">
+
+                <div class="title">
                     👥 Members / सदस्य
                 </div>
 
@@ -682,7 +676,11 @@ def dashboard():
             {% else %}
 
             <a href="/my_transactions">
-                📋 My Transaction History
+                📋 All Transaction History
+            </a>
+
+            <a href="/report">
+                📊 Date-wise Report
             </a>
 
             {% endif %}
@@ -698,9 +696,10 @@ def dashboard():
     return render_template_string(
         html,
         user=user,
-        total_jama=float(totals["total_jama"]),
-        total_payout=float(totals["total_payout"]),
+        total_jama=total_jama,
+        total_payout=total_payout,
         balance=balance,
+        total_wapas=total_wapas,
         member_count=member_count
     )
 

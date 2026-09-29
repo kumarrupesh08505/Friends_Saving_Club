@@ -14,11 +14,12 @@ app.secret_key = os.environ.get(
 )
 
 
-# =========================
-# DATABASE CONNECTION
-# =========================
+# =========================================================
+# DATABASE
+# =========================================================
 
 def get_conn():
+
     database_url = os.environ.get("DATABASE_URL")
 
     if not database_url:
@@ -30,15 +31,16 @@ def get_conn():
     )
 
 
-# =========================
-# DATABASE INITIALIZATION
-# =========================
+# =========================================================
+# INIT DATABASE
+# =========================================================
 
 def init_db():
 
     conn = get_conn()
     cur = conn.cursor()
 
+    # Members
     cur.execute("""
         CREATE TABLE IF NOT EXISTS fsc_members (
             id SERIAL PRIMARY KEY,
@@ -50,6 +52,7 @@ def init_db():
         )
     """)
 
+    # Old / regular transactions
     cur.execute("""
         CREATE TABLE IF NOT EXISTS fsc_transactions (
             id SERIAL PRIMARY KEY,
@@ -62,6 +65,7 @@ def init_db():
         )
     """)
 
+    # Users
     cur.execute("""
         CREATE TABLE IF NOT EXISTS fsc_users (
             id SERIAL PRIMARY KEY,
@@ -69,6 +73,54 @@ def init_db():
             password TEXT NOT NULL,
             role TEXT NOT NULL,
             member_id INTEGER REFERENCES fsc_members(id) ON DELETE CASCADE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # =====================================================
+    # LOANS
+    # =====================================================
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fsc_loans (
+            id SERIAL PRIMARY KEY,
+
+            member_id INTEGER
+            REFERENCES fsc_members(id)
+            ON DELETE CASCADE,
+
+            amount NUMERIC(12,2) NOT NULL,
+
+            loan_date DATE NOT NULL,
+
+            note TEXT,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # =====================================================
+    # EMI
+    # =====================================================
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fsc_loan_emi (
+            id SERIAL PRIMARY KEY,
+
+            loan_id INTEGER
+            REFERENCES fsc_loans(id)
+            ON DELETE CASCADE,
+
+            member_id INTEGER
+            REFERENCES fsc_members(id)
+            ON DELETE CASCADE,
+
+            amount NUMERIC(12,2) NOT NULL,
+
+            emi_date DATE NOT NULL,
+
+            note TEXT,
+
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -100,9 +152,9 @@ def init_db():
     conn.close()
 
 
-# =========================
-# HELPERS
-# =========================
+# =========================================================
+# USER HELPERS
+# =========================================================
 
 def current_user():
 
@@ -130,7 +182,9 @@ def is_admin():
 
     user = current_user()
 
-    return user and user["role"] == "admin"
+    return bool(
+        user and user["role"] == "admin"
+    )
 
 
 def get_member_for_user():
@@ -157,9 +211,9 @@ def get_member_for_user():
     return member
 
 
-# =========================
-# LOGIN PAGE
-# =========================
+# =========================================================
+# LOGIN
+# =========================================================
 
 LOGIN_HTML = """
 <!DOCTYPE html>
@@ -168,9 +222,10 @@ LOGIN_HTML = """
 
 <head>
 
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
 
-<title>Friend Saving Club - Login</title>
+<title>Friend Saving Club</title>
 
 <style>
 
@@ -178,7 +233,6 @@ body {
     font-family: Arial;
     background: linear-gradient(135deg,#667eea,#764ba2);
     margin: 0;
-    padding: 0;
 }
 
 .box {
@@ -188,13 +242,11 @@ body {
     background: white;
     padding: 30px;
     border-radius: 15px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
     box-sizing: border-box;
 }
 
 h1 {
     text-align: center;
-    color: #333;
 }
 
 input {
@@ -202,8 +254,8 @@ input {
     padding: 12px;
     margin: 8px 0;
     box-sizing: border-box;
-    border: 1px solid #ccc;
     border-radius: 8px;
+    border: 1px solid #ccc;
 }
 
 button {
@@ -214,17 +266,11 @@ button {
     border: none;
     border-radius: 8px;
     font-size: 16px;
-    cursor: pointer;
-}
-
-button:hover {
-    background: #5568d8;
 }
 
 .error {
     color: red;
     text-align: center;
-    margin-bottom: 10px;
 }
 
 </style>
@@ -238,13 +284,12 @@ button:hover {
 <h1>💰 Friend Saving Club</h1>
 
 {% if error %}
-<div class="error">{{ error }}</div>
+<p class="error">{{ error }}</p>
 {% endif %}
 
 <form method="POST">
 
 <input
-type="text"
 name="username"
 placeholder="Username"
 required
@@ -293,12 +338,17 @@ def login():
         cur.close()
         conn.close()
 
-        if user and check_password_hash(user["password"], password):
+        if user and check_password_hash(
+            user["password"],
+            password
+        ):
 
             session["user_id"] = user["id"]
             session["role"] = user["role"]
 
-            return redirect(url_for("dashboard"))
+            return redirect(
+                url_for("dashboard")
+            )
 
         return render_template_string(
             LOGIN_HTML,
@@ -311,21 +361,23 @@ def login():
     )
 
 
-# =========================
+# =========================================================
 # LOGOUT
-# =========================
+# =========================================================
 
 @app.route("/logout")
 def logout():
 
     session.clear()
 
-    return redirect(url_for("login"))
+    return redirect(
+        url_for("login")
+    )
 
 
-# =========================
+# =========================================================
 # DASHBOARD
-# =========================
+# =========================================================
 
 @app.route("/dashboard")
 def dashboard():
@@ -333,96 +385,71 @@ def dashboard():
     user = current_user()
 
     if not user:
-        return redirect(url_for("login"))
+        return redirect(
+            url_for("login")
+        )
 
     conn = get_conn()
     cur = conn.cursor()
 
-    # Overall Jama and Payout
+    # Regular savings
     cur.execute("""
         SELECT
             COALESCE(
-                SUM(
-                    CASE
-                        WHEN transaction_type = 'jama'
-                        THEN amount
-                        ELSE 0
-                    END
-                ), 0
-            ) AS total_jama,
-
-            COALESCE(
-                SUM(
-                    CASE
-                        WHEN transaction_type = 'payout'
-                        THEN amount
-                        ELSE 0
-                    END
-                ), 0
-            ) AS total_payout
+                SUM(amount), 0
+            ) AS total_jama
 
         FROM fsc_transactions
+
+        WHERE transaction_type = 'jama'
     """)
 
-    totals = cur.fetchone()
+    total_jama = float(
+        cur.fetchone()["total_jama"]
+    )
 
-    total_jama = float(totals["total_jama"])
-    total_payout = float(totals["total_payout"])
-
-    # Total Amount = Current Balance
-    total_amount = total_jama - total_payout
-
-    # Member-wise Baaki/Wapas
+    # Loan given
     cur.execute("""
         SELECT
-            m.id,
-            m.name,
-
             COALESCE(
-                SUM(
-                    CASE
-                        WHEN t.transaction_type = 'jama'
-                        THEN t.amount
-                        ELSE 0
-                    END
-                ), 0
-            ) AS jama,
+                SUM(amount), 0
+            ) AS total_loan
 
-            COALESCE(
-                SUM(
-                    CASE
-                        WHEN t.transaction_type = 'payout'
-                        THEN t.amount
-                        ELSE 0
-                    END
-                ), 0
-            ) AS payout
-
-        FROM fsc_members m
-
-        LEFT JOIN fsc_transactions t
-        ON m.id = t.member_id
-
-        GROUP BY m.id, m.name
+        FROM fsc_loans
     """)
 
-    members = cur.fetchall()
+    total_loan = float(
+        cur.fetchone()["total_loan"]
+    )
 
-    total_baaki = 0
-    total_wapas = 0
+    # EMI received
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(amount), 0
+            ) AS total_emi
 
-    for member in members:
+        FROM fsc_loan_emi
+    """)
 
-        jama = float(member["jama"])
-        payout = float(member["payout"])
+    total_emi = float(
+        cur.fetchone()["total_emi"]
+    )
 
-        if payout > 0 and jama > payout:
-            total_baaki += jama - payout
+    # Actual group balance
+    total_amount = (
+        total_jama
+        - total_loan
+        + total_emi
+    )
 
-        if payout > jama:
-            total_wapas += payout - jama
+    # Outstanding loan
+    outstanding_loan = (
+        total_loan
+        - total_emi
+    )
 
-    # Member count
+    # Members
     cur.execute("""
         SELECT COUNT(*) AS count
         FROM fsc_members
@@ -460,8 +487,10 @@ body {
     padding: 20px;
 }
 
-.header h1 {
-    margin: 0;
+.logout {
+    float: right;
+    color: white;
+    text-decoration: none;
 }
 
 .container {
@@ -474,7 +503,6 @@ body {
     display: grid;
     grid-template-columns:
     repeat(auto-fit,minmax(180px,1fr));
-
     gap: 15px;
 }
 
@@ -487,14 +515,12 @@ body {
 }
 
 .card h3 {
-    margin-top: 0;
     color: #555;
 }
 
 .amount {
-    font-size: 25px;
+    font-size: 24px;
     font-weight: bold;
-    color: #222;
 }
 
 .menu {
@@ -515,12 +541,6 @@ body {
     0 4px 10px rgba(0,0,0,0.08);
 }
 
-.logout {
-    float: right;
-    color: white;
-    text-decoration: none;
-}
-
 </style>
 
 </head>
@@ -534,7 +554,9 @@ href="/logout">
 Logout
 </a>
 
-<h1>💰 Friend Saving Club</h1>
+<h1>
+💰 Friend Saving Club
+</h1>
 
 <p>
 Welcome, {{ user["username"] }}
@@ -542,27 +564,32 @@ Welcome, {{ user["username"] }}
 
 </div>
 
+
 <div class="container">
 
 <div class="cards">
 
 <div class="card">
 
-<h3>💵 Total Jama</h3>
+<h3>💵 Regular Jama</h3>
 
 <div class="amount">
 ₹{{ "%.2f"|format(total_jama) }}
 </div>
 
+<p>
+Monthly Saving
+</p>
+
 </div>
 
 
 <div class="card">
 
-<h3>💸 Total Payout</h3>
+<h3>🏦 Loan Given</h3>
 
 <div class="amount">
-₹{{ "%.2f"|format(total_payout) }}
+₹{{ "%.2f"|format(total_loan) }}
 </div>
 
 </div>
@@ -570,32 +597,32 @@ Welcome, {{ user["username"] }}
 
 <div class="card">
 
-<h3>💰 Total Amount / Balance</h3>
+<h3>💳 EMI Received</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(total_emi) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>📌 Outstanding Loan</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(outstanding_loan) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>💰 Actual Group Balance</h3>
 
 <div class="amount">
 ₹{{ "%.2f"|format(total_amount) }}
-</div>
-
-</div>
-
-
-<div class="card">
-
-<h3>📌 Total Baaki</h3>
-
-<div class="amount">
-₹{{ "%.2f"|format(total_baaki) }}
-</div>
-
-</div>
-
-
-<div class="card">
-
-<h3>🔄 Wapas Karna Hai</h3>
-
-<div class="amount">
-₹{{ "%.2f"|format(total_wapas) }}
 </div>
 
 </div>
@@ -616,39 +643,59 @@ Welcome, {{ user["username"] }}
 
 <div class="menu">
 
-{% if user["role"] == "admin" %}
-
 <a href="/members">
-👥 Members
+👥 All Members
 </a>
+
+
+<a href="/member_summary">
+📊 Member Summary
+</a>
+
+
+<a href="/savings">
+💵 Saving History
+</a>
+
+
+<a href="/loans">
+🏦 Loan History
+</a>
+
+
+<a href="/emi">
+💳 EMI History
+</a>
+
+
+<a href="/report">
+📊 Complete Report
+</a>
+
+
+{% if user["role"] == "admin" %}
 
 <a href="/add_member">
 ➕ Add Member
 </a>
 
-<a href="/add_transaction">
-💰 Record Transaction
+
+<a href="/add_saving">
+➕ Add Monthly Saving
 </a>
 
-<a href="/transactions">
-📋 Transaction History
+
+<a href="/add_loan">
+🏦 Give Loan
 </a>
 
-<a href="/report">
-📊 Monthly / Date Report
-</a>
 
-{% else %}
-
-<a href="/my_transactions">
-📋 My Transactions
-</a>
-
-<a href="/report">
-📊 Report
+<a href="/add_emi">
+💳 Receive EMI
 </a>
 
 {% endif %}
+
 
 <a href="/change_password">
 🔐 Change Password
@@ -668,23 +715,27 @@ Welcome, {{ user["username"] }}
         html,
         user=user,
         total_jama=total_jama,
-        total_payout=total_payout,
+        total_loan=total_loan,
+        total_emi=total_emi,
+        outstanding_loan=outstanding_loan,
         total_amount=total_amount,
-        total_baaki=total_baaki,
-        total_wapas=total_wapas,
         member_count=member_count
     )
 
 
-# =========================
+# =========================================================
 # MEMBERS
-# =========================
+# =========================================================
 
 @app.route("/members")
 def members():
 
-    if not is_admin():
-        return redirect(url_for("dashboard"))
+    user = current_user()
+
+    if not user:
+        return redirect(
+            url_for("login")
+        )
 
     conn = get_conn()
     cur = conn.cursor()
@@ -692,7 +743,7 @@ def members():
     cur.execute("""
         SELECT *
         FROM fsc_members
-        ORDER BY id DESC
+        ORDER BY name
     """)
 
     members = cur.fetchall()
@@ -735,25 +786,18 @@ body {
     0 4px 10px rgba(0,0,0,0.08);
 }
 
-a {
-    text-decoration: none;
-}
-
 .btn {
     display: inline-block;
     padding: 9px 13px;
     background: #667eea;
     color: white;
     border-radius: 7px;
+    text-decoration: none;
     margin: 3px;
 }
 
 .delete {
     background: #e74c3c;
-}
-
-.back {
-    background: #555;
 }
 
 </style>
@@ -764,19 +808,24 @@ a {
 
 <div class="container">
 
-<h1>👥 Members</h1>
+<h1>👥 All Members</h1>
 
 <a class="btn"
 href="/dashboard">
 ⬅ Dashboard
 </a>
 
+{% if user["role"] == "admin" %}
+
 <a class="btn"
 href="/add_member">
 ➕ Add Member
 </a>
 
+{% endif %}
+
 <hr>
+
 
 {% for m in members %}
 
@@ -794,6 +843,9 @@ Username: {{ m["username"] }}
 Phone: {{ m["phone"] or "-" }}
 </p>
 
+
+{% if user["role"] == "admin" %}
+
 <a class="btn"
 href="/edit_member/{{ m["id"] }}">
 ✏ Edit
@@ -805,11 +857,9 @@ onclick="return confirm('Delete this member?')">
 🗑 Delete
 </a>
 
+{% endif %}
+
 </div>
-
-{% else %}
-
-<p>No members found.</p>
 
 {% endfor %}
 
@@ -823,19 +873,22 @@ onclick="return confirm('Delete this member?')">
 
     return render_template_string(
         html,
-        members=members
+        members=members,
+        user=user
     )
 
 
-# =========================
+# =========================================================
 # ADD MEMBER
-# =========================
+# =========================================================
 
 @app.route("/add_member", methods=["GET", "POST"])
 def add_member():
 
     if not is_admin():
-        return redirect(url_for("dashboard"))
+        return redirect(
+            url_for("dashboard")
+        )
 
     if request.method == "POST":
 
@@ -849,15 +902,21 @@ def add_member():
 
         try:
 
+            hashed_password = generate_password_hash(
+                password
+            )
+
             cur.execute("""
                 INSERT INTO fsc_members
                 (name, username, password, phone)
+
                 VALUES (%s, %s, %s, %s)
+
                 RETURNING id
             """, (
                 name,
                 username,
-                generate_password_hash(password),
+                hashed_password,
                 phone
             ))
 
@@ -866,10 +925,11 @@ def add_member():
             cur.execute("""
                 INSERT INTO fsc_users
                 (username, password, role, member_id)
+
                 VALUES (%s, %s, %s, %s)
             """, (
                 username,
-                generate_password_hash(password),
+                hashed_password,
                 "member",
                 member_id
             ))
@@ -885,13 +945,17 @@ def add_member():
 
             return """
             <h2>Username already exists.</h2>
-            <a href="/add_member">Go Back</a>
+            <a href="/add_member">
+            Go Back
+            </a>
             """
 
         cur.close()
         conn.close()
 
-        return redirect(url_for("members"))
+        return redirect(
+            url_for("members")
+        )
 
     html = """
 
@@ -938,11 +1002,6 @@ button {
     border-radius: 8px;
 }
 
-a {
-    display: inline-block;
-    margin-top: 15px;
-}
-
 </style>
 
 </head>
@@ -968,6 +1027,7 @@ required
 >
 
 <input
+type="password"
 name="password"
 placeholder="Password"
 required
@@ -975,18 +1035,20 @@ required
 
 <input
 name="phone"
-placeholder="Phone Number"
+placeholder="Phone"
 >
 
-<button type="submit">
+<button>
 Add Member
 </button>
 
 </form>
 
+<p>
 <a href="/members">
 ⬅ Back
 </a>
+</p>
 
 </div>
 
@@ -996,18 +1058,22 @@ Add Member
 
 """
 
-    return render_template_string(html)
+    return render_template_string(
+        html
+    )
 
 
-# =========================
+# =========================================================
 # EDIT MEMBER
-# =========================
+# =========================================================
 
 @app.route("/edit_member/<int:id>", methods=["GET", "POST"])
 def edit_member(id):
 
     if not is_admin():
-        return redirect(url_for("dashboard"))
+        return redirect(
+            url_for("dashboard")
+        )
 
     conn = get_conn()
     cur = conn.cursor()
@@ -1035,9 +1101,11 @@ def edit_member(id):
 
         cur.execute("""
             UPDATE fsc_members
+
             SET name = %s,
                 username = %s,
                 phone = %s
+
             WHERE id = %s
         """, (
             name,
@@ -1048,7 +1116,9 @@ def edit_member(id):
 
         cur.execute("""
             UPDATE fsc_users
+
             SET username = %s
+
             WHERE member_id = %s
         """, (
             username,
@@ -1060,7 +1130,9 @@ def edit_member(id):
         cur.close()
         conn.close()
 
-        return redirect(url_for("members"))
+        return redirect(
+            url_for("members")
+        )
 
     cur.close()
     conn.close()
@@ -1139,8 +1211,8 @@ name="phone"
 value="{{ member["phone"] or "" }}"
 >
 
-<button type="submit">
-Update Member
+<button>
+Update
 </button>
 
 </form>
@@ -1165,15 +1237,17 @@ Update Member
     )
 
 
-# =========================
+# =========================================================
 # DELETE MEMBER
-# =========================
+# =========================================================
 
 @app.route("/delete_member/<int:id>")
 def delete_member(id):
 
     if not is_admin():
-        return redirect(url_for("dashboard"))
+        return redirect(
+            url_for("dashboard")
+        )
 
     conn = get_conn()
     cur = conn.cursor()
@@ -1188,18 +1262,22 @@ def delete_member(id):
     cur.close()
     conn.close()
 
-    return redirect(url_for("members"))
+    return redirect(
+        url_for("members")
+    )
 
 
-# =========================
-# ADD TRANSACTION
-# =========================
+# =========================================================
+# ADD MONTHLY SAVING
+# =========================================================
 
-@app.route("/add_transaction", methods=["GET", "POST"])
-def add_transaction():
+@app.route("/add_saving", methods=["GET", "POST"])
+def add_saving():
 
     if not is_admin():
-        return redirect(url_for("dashboard"))
+        return redirect(
+            url_for("dashboard")
+        )
 
     conn = get_conn()
     cur = conn.cursor()
@@ -1215,17 +1293,11 @@ def add_transaction():
     if request.method == "POST":
 
         member_id = request.form.get("member_id")
-        transaction_type = request.form.get("transaction_type")
         amount = request.form.get("amount")
-        transaction_date = request.form.get("transaction_date")
+        transaction_date = request.form.get(
+            "transaction_date"
+        )
         note = request.form.get("note")
-
-        if transaction_type not in ["jama", "payout"]:
-
-            cur.close()
-            conn.close()
-
-            return "Invalid transaction type"
 
         cur.execute("""
             INSERT INTO fsc_transactions
@@ -1237,10 +1309,9 @@ def add_transaction():
                 note
             )
 
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, 'jama', %s, %s, %s)
         """, (
             member_id,
-            transaction_type,
             amount,
             transaction_date,
             note
@@ -1251,7 +1322,9 @@ def add_transaction():
         cur.close()
         conn.close()
 
-        return redirect(url_for("transactions"))
+        return redirect(
+            url_for("savings")
+        )
 
     cur.close()
     conn.close()
@@ -1267,7 +1340,7 @@ def add_transaction():
 <meta name="viewport"
 content="width=device-width, initial-scale=1">
 
-<title>Add Transaction</title>
+<title>Monthly Saving</title>
 
 <style>
 
@@ -1285,26 +1358,20 @@ body {
     border-radius: 14px;
 }
 
-input,
-select,
-textarea {
-
+input, select, textarea {
     width: 100%;
     padding: 12px;
     margin: 8px 0;
     box-sizing: border-box;
-
 }
 
 button {
-
     width: 100%;
     padding: 12px;
     background: #667eea;
     color: white;
     border: none;
     border-radius: 8px;
-
 }
 
 </style>
@@ -1315,11 +1382,9 @@ button {
 
 <div class="box">
 
-<h1>💰 Record Transaction</h1>
+<h1>💵 Monthly Saving</h1>
 
 <form method="POST">
-
-<label>Member</label>
 
 <select name="member_id" required>
 
@@ -1337,30 +1402,13 @@ Select Member
 
 </select>
 
-
-<label>Transaction Type</label>
-
-<select name="transaction_type" required>
-
-<option value="jama">
-Jama / Deposit
-</option>
-
-<option value="payout">
-Payout / Money Taken
-</option>
-
-</select>
-
-
 <input
 type="number"
 step="0.01"
 name="amount"
-placeholder="Amount"
+placeholder="Saving Amount"
 required
 >
-
 
 <input
 type="date"
@@ -1369,15 +1417,13 @@ value="{{ today }}"
 required
 >
 
-
 <textarea
 name="note"
-placeholder="Note"
+placeholder="Month / Note"
 ></textarea>
 
-
-<button type="submit">
-Save Transaction
+<button>
+Save Monthly Jama
 </button>
 
 </form>
@@ -1399,19 +1445,25 @@ Save Transaction
     return render_template_string(
         html,
         members=members,
-        today=datetime.now().strftime("%Y-%m-%d")
+        today=datetime.now().strftime(
+            "%Y-%m-%d"
+        )
     )
 
 
-# =========================
-# TRANSACTION HISTORY
-# =========================
+# =========================================================
+# SAVING HISTORY
+# =========================================================
 
-@app.route("/transactions")
-def transactions():
+@app.route("/savings")
+def savings():
 
-    if not is_admin():
-        return redirect(url_for("dashboard"))
+    user = current_user()
+
+    if not user:
+        return redirect(
+            url_for("login")
+        )
 
     conn = get_conn()
     cur = conn.cursor()
@@ -1426,12 +1478,14 @@ def transactions():
         JOIN fsc_members m
         ON t.member_id = m.id
 
+        WHERE t.transaction_type = 'jama'
+
         ORDER BY
             t.transaction_date DESC,
             t.id DESC
     """)
 
-    transactions = cur.fetchall()
+    savings = cur.fetchall()
 
     cur.close()
     conn.close()
@@ -1447,7 +1501,7 @@ def transactions():
 <meta name="viewport"
 content="width=device-width, initial-scale=1">
 
-<title>Transaction History</title>
+<title>Saving History</title>
 
 <style>
 
@@ -1457,8 +1511,8 @@ body {
 }
 
 .container {
-    width: 96%;
-    max-width: 1100px;
+    width: 94%;
+    max-width: 1000px;
     margin: 20px auto;
 }
 
@@ -1469,12 +1523,403 @@ body {
     border-radius: 10px;
 }
 
-.jama {
+.green {
     color: green;
     font-weight: bold;
 }
 
-.payout {
+.btn {
+    display: inline-block;
+    padding: 8px 12px;
+    background: #667eea;
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+}
+
+.red {
+    background: #e74c3c;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>💵 Monthly Saving History</h1>
+
+<a class="btn"
+href="/dashboard">
+⬅ Dashboard
+</a>
+
+{% if user["role"] == "admin" %}
+
+<a class="btn"
+href="/add_saving">
+➕ Add Saving
+</a>
+
+{% endif %}
+
+<hr>
+
+{% for s in savings %}
+
+<div class="card">
+
+<h3>
+{{ s["name"] }}
+</h3>
+
+<p>
+📅 {{ s["transaction_date"] }}
+</p>
+
+<p class="green">
+💵 Jama:
+₹{{ "%.2f"|format(s["amount"]|float) }}
+</p>
+
+<p>
+📝 {{ s["note"] or "-" }}
+</p>
+
+
+{% if user["role"] == "admin" %}
+
+<a class="btn red"
+href="/delete_saving/{{ s["id"] }}"
+onclick="return confirm('Delete this saving?')">
+🗑 Delete
+</a>
+
+{% endif %}
+
+</div>
+
+{% endfor %}
+
+</div>
+
+</body>
+
+</html>
+
+"""
+
+    return render_template_string(
+        html,
+        savings=savings,
+        user=user
+    )
+
+
+# =========================================================
+# DELETE SAVING
+# =========================================================
+
+@app.route("/delete_saving/<int:id>")
+def delete_saving(id):
+
+    if not is_admin():
+        return redirect(
+            url_for("dashboard")
+        )
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM fsc_transactions
+        WHERE id = %s
+        AND transaction_type = 'jama'
+    """, (id,))
+
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return redirect(
+        url_for("savings")
+    )
+
+
+# =========================================================
+# ADD LOAN
+# =========================================================
+
+@app.route("/add_loan", methods=["GET", "POST"])
+def add_loan():
+
+    if not is_admin():
+        return redirect(
+            url_for("dashboard")
+        )
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, name
+        FROM fsc_members
+        ORDER BY name
+    """)
+
+    members = cur.fetchall()
+
+    if request.method == "POST":
+
+        member_id = request.form.get("member_id")
+        amount = request.form.get("amount")
+        loan_date = request.form.get("loan_date")
+        note = request.form.get("note")
+
+        cur.execute("""
+            INSERT INTO fsc_loans
+            (
+                member_id,
+                amount,
+                loan_date,
+                note
+            )
+
+            VALUES (%s, %s, %s, %s)
+        """, (
+            member_id,
+            amount,
+            loan_date,
+            note
+        ))
+
+        conn.commit()
+
+        cur.close()
+        conn.close()
+
+        return redirect(
+            url_for("loans")
+        )
+
+    cur.close()
+    conn.close()
+
+    html = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Give Loan</title>
+
+<style>
+
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
+
+.box {
+    width: 94%;
+    max-width: 500px;
+    margin: 30px auto;
+    background: white;
+    padding: 25px;
+    border-radius: 14px;
+}
+
+input, select, textarea {
+    width: 100%;
+    padding: 12px;
+    margin: 8px 0;
+    box-sizing: border-box;
+}
+
+button {
+    width: 100%;
+    padding: 12px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 8px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="box">
+
+<h1>🏦 Give Loan</h1>
+
+<form method="POST">
+
+<select name="member_id" required>
+
+<option value="">
+Select Member
+</option>
+
+{% for m in members %}
+
+<option value="{{ m["id"] }}">
+{{ m["name"] }}
+</option>
+
+{% endfor %}
+
+</select>
+
+<input
+type="number"
+step="0.01"
+name="amount"
+placeholder="Loan Amount"
+required
+>
+
+<input
+type="date"
+name="loan_date"
+value="{{ today }}"
+required
+>
+
+<textarea
+name="note"
+placeholder="Loan Note"
+></textarea>
+
+<button>
+Save Loan
+</button>
+
+</form>
+
+<p>
+<a href="/dashboard">
+⬅ Dashboard
+</a>
+</p>
+
+</div>
+
+</body>
+
+</html>
+
+"""
+
+    return render_template_string(
+        html,
+        members=members,
+        today=datetime.now().strftime(
+            "%Y-%m-%d"
+        )
+    )
+
+
+# =========================================================
+# LOAN HISTORY
+# =========================================================
+
+@app.route("/loans")
+def loans():
+
+    user = current_user()
+
+    if not user:
+        return redirect(
+            url_for("login")
+        )
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            l.*,
+            m.name,
+
+            COALESCE(
+                (
+                    SELECT SUM(e.amount)
+                    FROM fsc_loan_emi e
+                    WHERE e.loan_id = l.id
+                ),
+                0
+            ) AS emi_paid
+
+        FROM fsc_loans l
+
+        JOIN fsc_members m
+        ON l.member_id = m.id
+
+        ORDER BY
+            l.loan_date DESC,
+            l.id DESC
+    """)
+
+    loans = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    html = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Loan History</title>
+
+<style>
+
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
+
+.container {
+    width: 94%;
+    max-width: 1100px;
+    margin: 20px auto;
+}
+
+.card {
+    background: white;
+    padding: 18px;
+    margin-bottom: 12px;
+    border-radius: 12px;
+}
+
+.loan {
+    color: #8e44ad;
+    font-weight: bold;
+}
+
+.emi {
+    color: green;
+    font-weight: bold;
+}
+
+.outstanding {
     color: red;
     font-weight: bold;
 }
@@ -1501,66 +1946,76 @@ body {
 
 <div class="container">
 
-<h1>📋 Transaction History</h1>
+<h1>🏦 Loan History</h1>
 
-<a class="btn" href="/dashboard">
+<a class="btn"
+href="/dashboard">
 ⬅ Dashboard
 </a>
 
-<a class="btn" href="/add_transaction">
-➕ Add Transaction
+{% if user["role"] == "admin" %}
+
+<a class="btn"
+href="/add_loan">
+➕ Give Loan
 </a>
-
-<hr>
-
-{% for t in transactions %}
-
-<div class="card">
-
-<h3>
-{{ t["name"] }}
-</h3>
-
-<p>
-📅 {{ t["transaction_date"] }}
-</p>
-
-{% if t["transaction_type"] == "jama" %}
-
-<p class="jama">
-➕ Jama: ₹{{ "%.2f"|format(t["amount"]|float) }}
-</p>
-
-{% else %}
-
-<p class="payout">
-➖ Payout: ₹{{ "%.2f"|format(t["amount"]|float) }}
-</p>
 
 {% endif %}
 
+<hr>
+
+
+{% for l in loans %}
+
+{% set loan_amount = l["amount"]|float %}
+{% set emi_paid = l["emi_paid"]|float %}
+{% set outstanding = loan_amount - emi_paid %}
+
+<div class="card">
+
+<h2>
+{{ l["name"] }}
+</h2>
+
 <p>
-📝 {{ t["note"] or "-" }}
+📅 {{ l["loan_date"] }}
 </p>
 
+<p class="loan">
+🏦 Loan Given:
+₹{{ "%.2f"|format(loan_amount) }}
+</p>
+
+<p class="emi">
+💳 EMI Received:
+₹{{ "%.2f"|format(emi_paid) }}
+</p>
+
+<p class="outstanding">
+📌 Outstanding:
+₹{{ "%.2f"|format(outstanding if outstanding > 0 else 0) }}
+</p>
+
+<p>
+📝 {{ l["note"] or "-" }}
+</p>
+
+{% if user["role"] == "admin" %}
+
 <a class="btn"
-href="/edit_transaction/{{ t["id"] }}">
-✏ Edit
+href="/add_emi?loan_id={{ l["id"] }}">
+💳 Receive EMI
 </a>
 
 <a class="btn delete"
-href="/delete_transaction/{{ t["id"] }}"
-onclick="return confirm('Delete this transaction?')">
+href="/delete_loan/{{ l["id"] }}"
+onclick="return confirm('Delete this loan? All EMI records will also be deleted.')">
 🗑 Delete
 </a>
 
+{% endif %}
+
 </div>
-
-{% else %}
-
-<p>
-No transactions found.
-</p>
 
 {% endfor %}
 
@@ -1574,60 +2029,127 @@ No transactions found.
 
     return render_template_string(
         html,
-        transactions=transactions
+        loans=loans,
+        user=user
     )
 
 
-# =========================
-# EDIT TRANSACTION
-# =========================
+# =========================================================
+# DELETE LOAN
+# =========================================================
 
-@app.route("/edit_transaction/<int:id>", methods=["GET", "POST"])
-def edit_transaction(id):
+@app.route("/delete_loan/<int:id>")
+def delete_loan(id):
 
     if not is_admin():
-        return redirect(url_for("dashboard"))
+        return redirect(
+            url_for("dashboard")
+        )
 
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT *
-        FROM fsc_transactions
+        DELETE FROM fsc_loans
         WHERE id = %s
     """, (id,))
 
-    transaction = cur.fetchone()
+    conn.commit()
 
-    if not transaction:
+    cur.close()
+    conn.close()
 
-        cur.close()
-        conn.close()
+    return redirect(
+        url_for("loans")
+    )
 
-        return "Transaction not found"
+
+# =========================================================
+# ADD EMI
+# =========================================================
+
+@app.route("/add_emi", methods=["GET", "POST"])
+def add_emi():
+
+    if not is_admin():
+        return redirect(
+            url_for("dashboard")
+        )
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            l.id,
+            l.member_id,
+            l.amount,
+            l.loan_date,
+            m.name,
+
+            COALESCE(
+                (
+                    SELECT SUM(e.amount)
+                    FROM fsc_loan_emi e
+                    WHERE e.loan_id = l.id
+                ),
+                0
+            ) AS emi_paid
+
+        FROM fsc_loans l
+
+        JOIN fsc_members m
+        ON l.member_id = m.id
+
+        ORDER BY
+            l.loan_date DESC
+    """)
+
+    loans = cur.fetchall()
+
+    selected_loan_id = request.args.get(
+        "loan_id"
+    )
 
     if request.method == "POST":
 
-        transaction_type = request.form.get("transaction_type")
+        loan_id = request.form.get("loan_id")
         amount = request.form.get("amount")
-        transaction_date = request.form.get("transaction_date")
+        emi_date = request.form.get("emi_date")
         note = request.form.get("note")
 
         cur.execute("""
-            UPDATE fsc_transactions
-
-            SET transaction_type = %s,
-                amount = %s,
-                transaction_date = %s,
-                note = %s
-
+            SELECT member_id
+            FROM fsc_loans
             WHERE id = %s
+        """, (loan_id,))
+
+        loan = cur.fetchone()
+
+        if not loan:
+
+            cur.close()
+            conn.close()
+
+            return "Loan not found"
+
+        cur.execute("""
+            INSERT INTO fsc_loan_emi
+            (
+                loan_id,
+                member_id,
+                amount,
+                emi_date,
+                note
+            )
+
+            VALUES (%s, %s, %s, %s, %s)
         """, (
-            transaction_type,
+            loan_id,
+            loan["member_id"],
             amount,
-            transaction_date,
-            note,
-            id
+            emi_date,
+            note
         ))
 
         conn.commit()
@@ -1635,7 +2157,9 @@ def edit_transaction(id):
         cur.close()
         conn.close()
 
-        return redirect(url_for("transactions"))
+        return redirect(
+            url_for("emi")
+        )
 
     cur.close()
     conn.close()
@@ -1651,7 +2175,7 @@ def edit_transaction(id):
 <meta name="viewport"
 content="width=device-width, initial-scale=1">
 
-<title>Edit Transaction</title>
+<title>Receive EMI</title>
 
 <style>
 
@@ -1669,26 +2193,20 @@ body {
     border-radius: 14px;
 }
 
-input,
-select,
-textarea {
-
+select, input, textarea {
     width: 100%;
     padding: 12px;
     margin: 8px 0;
     box-sizing: border-box;
-
 }
 
 button {
-
     width: 100%;
     padding: 12px;
     background: #667eea;
     color: white;
     border: none;
     border-radius: 8px;
-
 }
 
 </style>
@@ -1699,29 +2217,47 @@ button {
 
 <div class="box">
 
-<h1>✏ Edit Transaction</h1>
+<h1>💳 Receive Loan EMI</h1>
 
 <form method="POST">
 
-<select name="transaction_type">
+<label>
+Select Loan
+</label>
+
+<select name="loan_id" required>
+
+<option value="">
+Select Loan
+</option>
+
+{% for l in loans %}
+
+{% set outstanding =
+(l["amount"]|float) -
+(l["emi_paid"]|float)
+%}
+
+{% if outstanding > 0 %}
 
 <option
-value="jama"
-{% if transaction["transaction_type"] == "jama" %}
+value="{{ l["id"] }}"
+{% if selected_loan_id and selected_loan_id|string == l["id"]|string %}
 selected
 {% endif %}
 >
-Jama
+
+{{ l["name"] }}
+-
+Loan ₹{{ "%.2f"|format(l["amount"]|float) }}
+-
+Remaining ₹{{ "%.2f"|format(outstanding) }}
+
 </option>
 
-<option
-value="payout"
-{% if transaction["transaction_type"] == "payout" %}
-selected
 {% endif %}
->
-Payout
-</option>
+
+{% endfor %}
 
 </select>
 
@@ -1730,32 +2266,33 @@ Payout
 type="number"
 step="0.01"
 name="amount"
-value="{{ transaction["amount"] }}"
+placeholder="EMI Amount"
 required
 >
 
 
 <input
 type="date"
-name="transaction_date"
-value="{{ transaction["transaction_date"] }}"
+name="emi_date"
+value="{{ today }}"
 required
 >
 
 
 <textarea
 name="note"
->{{ transaction["note"] or "" }}</textarea>
+placeholder="EMI Note"
+></textarea>
 
 
-<button type="submit">
-Update Transaction
+<button>
+Save EMI
 </button>
 
 </form>
 
 <p>
-<a href="/transactions">
+<a href="/loans">
 ⬅ Back
 </a>
 </p>
@@ -1770,119 +2307,47 @@ Update Transaction
 
     return render_template_string(
         html,
-        transaction=transaction
+        loans=loans,
+        selected_loan_id=selected_loan_id,
+        today=datetime.now().strftime(
+            "%Y-%m-%d"
+        )
     )
 
 
-# =========================
-# DELETE TRANSACTION
-# =========================
+# =========================================================
+# EMI HISTORY
+# =========================================================
 
-@app.route("/delete_transaction/<int:id>")
-def delete_transaction(id):
-
-    if not is_admin():
-        return redirect(url_for("dashboard"))
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        DELETE FROM fsc_transactions
-        WHERE id = %s
-    """, (id,))
-
-    conn.commit()
-
-    cur.close()
-    conn.close()
-
-    return redirect(url_for("transactions"))
-
-
-# =========================
-# MY TRANSACTIONS
-# =========================
-
-@app.route("/my_transactions")
-def my_transactions():
+@app.route("/emi")
+def emi():
 
     user = current_user()
 
     if not user:
-        return redirect(url_for("login"))
-
-    member = get_member_for_user()
-
-    if not member:
-        return redirect(url_for("dashboard"))
+        return redirect(
+            url_for("login")
+        )
 
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
         SELECT
-            t.*
+            e.*,
+            m.name
 
-        FROM fsc_transactions t
+        FROM fsc_loan_emi e
 
-        WHERE t.member_id = %s
+        JOIN fsc_members m
+        ON e.member_id = m.id
 
         ORDER BY
-            t.transaction_date DESC,
-            t.id DESC
-    """, (member["id"],))
+            e.emi_date DESC,
+            e.id DESC
+    """)
 
-    transactions = cur.fetchall()
-
-    # Member total
-    cur.execute("""
-        SELECT
-
-            COALESCE(
-                SUM(
-                    CASE
-                        WHEN transaction_type = 'jama'
-                        THEN amount
-                        ELSE 0
-                    END
-                ), 0
-            ) AS total_jama,
-
-            COALESCE(
-                SUM(
-                    CASE
-                        WHEN transaction_type = 'payout'
-                        THEN amount
-                        ELSE 0
-                    END
-                ), 0
-            ) AS total_payout
-
-        FROM fsc_transactions
-
-        WHERE member_id = %s
-    """, (member["id"],))
-
-    totals = cur.fetchone()
-
-    total_jama = float(totals["total_jama"])
-    total_payout = float(totals["total_payout"])
-
-    total_amount = total_jama - total_payout
-
-    if total_payout > 0:
-        total_baaki = max(
-            total_jama - total_payout,
-            0
-        )
-    else:
-        total_baaki = 0
-
-    total_wapas = max(
-        total_payout - total_jama,
-        0
-    )
+    emis = cur.fetchall()
 
     cur.close()
     conn.close()
@@ -1898,7 +2363,7 @@ def my_transactions():
 <meta name="viewport"
 content="width=device-width, initial-scale=1">
 
-<title>My Transactions</title>
+<title>EMI History</title>
 
 <style>
 
@@ -1913,57 +2378,29 @@ body {
     margin: 20px auto;
 }
 
-.cards {
-    display: grid;
-    grid-template-columns:
-    repeat(auto-fit,minmax(160px,1fr));
-
-    gap: 12px;
-}
-
 .card {
     background: white;
-    padding: 18px;
-    border-radius: 12px;
-    box-shadow:
-    0 4px 10px rgba(0,0,0,0.08);
-}
-
-.amount {
-    font-size: 23px;
-    font-weight: bold;
-}
-
-.transaction {
-    background: white;
-    padding: 15px;
-    margin-top: 10px;
+    padding: 16px;
+    margin-bottom: 10px;
     border-radius: 10px;
 }
 
-.jama {
+.green {
     color: green;
-}
-
-.payout {
-    color: red;
-}
-
-.blue {
-    color: #1565c0;
-}
-
-.orange {
-    color: #e65100;
+    font-weight: bold;
 }
 
 .btn {
     display: inline-block;
-    padding: 9px 13px;
+    padding: 8px 12px;
     background: #667eea;
     color: white;
     text-decoration: none;
-    border-radius: 7px;
+    border-radius: 6px;
+}
+
+.delete {
+    background: #e74c3c;
 }
 
 </style>
@@ -1974,121 +2411,56 @@ body {
 
 <div class="container">
 
-<h1>
-📋 {{ member["name"] }} - Transactions
-</h1>
+<h1>💳 EMI History</h1>
 
 <a class="btn"
 href="/dashboard">
 ⬅ Dashboard
 </a>
 
-<br><br>
+{% if user["role"] == "admin" %}
 
-
-<div class="cards">
-
-<div class="card">
-
-<h3>💵 Total Jama</h3>
-
-<div class="amount">
-₹{{ "%.2f"|format(total_jama) }}
-</div>
-
-</div>
-
-
-<div class="card">
-
-<h3>💸 Total Payout</h3>
-
-<div class="amount">
-₹{{ "%.2f"|format(total_payout) }}
-</div>
-
-</div>
-
-
-<div class="card">
-
-<h3>💰 Total Amount / Balance</h3>
-
-<div class="amount">
-₹{{ "%.2f"|format(total_amount) }}
-</div>
-
-</div>
-
-
-<div class="card">
-
-<h3>📌 Baaki</h3>
-
-<div class="amount blue">
-₹{{ "%.2f"|format(total_baaki) }}
-</div>
-
-</div>
-
-
-<div class="card">
-
-<h3>🔄 Wapas Karna Hai</h3>
-
-<div class="amount orange">
-₹{{ "%.2f"|format(total_wapas) }}
-</div>
-
-</div>
-
-</div>
-
-
-<h2>
-Transaction History
-</h2>
-
-
-{% for t in transactions %}
-
-<div class="transaction">
-
-<p>
-📅 {{ t["transaction_date"] }}
-</p>
-
-{% if t["transaction_type"] == "jama" %}
-
-<p class="jama">
-➕ Jama:
-<b>
-₹{{ "%.2f"|format(t["amount"]|float) }}
-</b>
-</p>
-
-{% else %}
-
-<p class="payout">
-➖ Payout:
-<b>
-₹{{ "%.2f"|format(t["amount"]|float) }}
-</b>
-</p>
+<a class="btn"
+href="/add_emi">
+➕ Receive EMI
+</a>
 
 {% endif %}
 
+<hr>
+
+{% for e in emis %}
+
+<div class="card">
+
+<h3>
+{{ e["name"] }}
+</h3>
+
 <p>
-📝 {{ t["note"] or "-" }}
+📅 {{ e["emi_date"] }}
 </p>
+
+<p class="green">
+💳 EMI Received:
+₹{{ "%.2f"|format(e["amount"]|float) }}
+</p>
+
+<p>
+📝 {{ e["note"] or "-" }}
+</p>
+
+{% if user["role"] == "admin" %}
+
+<a class="btn delete"
+href="/delete_emi/{{ e["id"] }}"
+onclick="return confirm('Delete this EMI?')">
+🗑 Delete
+</a>
+
+{% endif %}
 
 </div>
-
-{% else %}
-
-<p>
-No transactions found.
-</p>
 
 {% endfor %}
 
@@ -2102,162 +2474,121 @@ No transactions found.
 
     return render_template_string(
         html,
-        member=member,
-        transactions=transactions,
-        total_jama=total_jama,
-        total_payout=total_payout,
-        total_amount=total_amount,
-        total_baaki=total_baaki,
-        total_wapas=total_wapas
+        emis=emis,
+        user=user
     )
 
 
-# =========================
-# REPORT
-# =========================
+# =========================================================
+# DELETE EMI
+# =========================================================
 
-@app.route("/report")
-def report():
+@app.route("/delete_emi/<int:id>")
+def delete_emi(id):
 
-    user = current_user()
-
-    if not user:
-        return redirect(url_for("login"))
-
-    from_date = request.args.get("from_date")
-    to_date = request.args.get("to_date")
+    if not is_admin():
+        return redirect(
+            url_for("dashboard")
+        )
 
     conn = get_conn()
     cur = conn.cursor()
 
-    if from_date and to_date:
+    cur.execute("""
+        DELETE FROM fsc_loan_emi
+        WHERE id = %s
+    """, (id,))
 
-        cur.execute("""
-            SELECT
-                m.id,
-                m.name,
+    conn.commit()
 
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN t.transaction_type = 'jama'
-                            THEN t.amount
-                            ELSE 0
-                        END
-                    ), 0
-                ) AS jama,
+    cur.close()
+    conn.close()
 
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN t.transaction_type = 'payout'
-                            THEN t.amount
-                            ELSE 0
-                        END
-                    ), 0
-                ) AS payout
+    return redirect(
+        url_for("emi")
+    )
 
-            FROM fsc_members m
 
-            LEFT JOIN fsc_transactions t
-            ON m.id = t.member_id
-            AND t.transaction_date
-                BETWEEN %s AND %s
+# =========================================================
+# MEMBER SUMMARY
+# =========================================================
 
-            GROUP BY m.id, m.name
+@app.route("/member_summary")
+def member_summary():
 
-            ORDER BY m.name
-        """, (
-            from_date,
-            to_date
-        ))
+    user = current_user()
 
-    else:
+    if not user:
+        return redirect(
+            url_for("login")
+        )
 
-        cur.execute("""
-            SELECT
-                m.id,
-                m.name,
+    conn = get_conn()
+    cur = conn.cursor()
 
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN t.transaction_type = 'jama'
-                            THEN t.amount
-                            ELSE 0
-                        END
-                    ), 0
-                ) AS jama,
+    cur.execute("""
+        SELECT
+            m.id,
+            m.name,
 
-                COALESCE(
-                    SUM(
-                        CASE
-                            WHEN t.transaction_type = 'payout'
-                            THEN t.amount
-                            ELSE 0
-                        END
-                    ), 0
-                ) AS payout
+            COALESCE(
+                (
+                    SELECT SUM(t.amount)
+                    FROM fsc_transactions t
+                    WHERE t.member_id = m.id
+                    AND t.transaction_type = 'jama'
+                ),
+                0
+            ) AS jama,
 
-            FROM fsc_members m
+            COALESCE(
+                (
+                    SELECT SUM(l.amount)
+                    FROM fsc_loans l
+                    WHERE l.member_id = m.id
+                ),
+                0
+            ) AS loan,
 
-            LEFT JOIN fsc_transactions t
-            ON m.id = t.member_id
+            COALESCE(
+                (
+                    SELECT SUM(e.amount)
+                    FROM fsc_loan_emi e
+                    WHERE e.member_id = m.id
+                ),
+                0
+            ) AS emi
 
-            GROUP BY m.id, m.name
+        FROM fsc_members m
 
-            ORDER BY m.name
-        """)
+        ORDER BY m.name
+    """)
 
     rows = cur.fetchall()
 
     cur.close()
     conn.close()
 
-    report_data = []
+    summary = []
 
-    total_jama = 0
-    total_payout = 0
-    total_baaki = 0
-    total_wapas = 0
+    for r in rows:
 
-    for row in rows:
+        jama = float(r["jama"])
+        loan = float(r["loan"])
+        emi = float(r["emi"])
 
-        jama = float(row["jama"])
-        payout = float(row["payout"])
-
-        balance = jama - payout
-
-        # Baaki rule:
-        # payout must be greater than 0
-        if payout > 0:
-            baaki = max(
-                jama - payout,
-                0
-            )
-        else:
-            baaki = 0
-
-        wapas = max(
-            payout - jama,
+        outstanding = max(
+            loan - emi,
             0
         )
 
-        total_jama += jama
-        total_payout += payout
-        total_baaki += baaki
-        total_wapas += wapas
-
-        report_data.append({
-            "name": row["name"],
+        summary.append({
+            "name": r["name"],
             "jama": jama,
-            "payout": payout,
-            "balance": balance,
-            "baaki": baaki,
-            "wapas": wapas
+            "loan": loan,
+            "emi": emi,
+            "outstanding": outstanding
         })
-
-    total_amount = total_jama - total_payout
 
     html = """
 
@@ -2270,7 +2601,7 @@ def report():
 <meta name="viewport"
 content="width=device-width, initial-scale=1">
 
-<title>Report</title>
+<title>Member Summary</title>
 
 <style>
 
@@ -2280,60 +2611,18 @@ body {
 }
 
 .container {
-    width: 96%;
+    width: 98%;
     max-width: 1200px;
     margin: 20px auto;
-}
-
-.filter {
-    background: white;
-    padding: 18px;
-    border-radius: 12px;
-    margin-bottom: 15px;
-}
-
-input {
-    padding: 10px;
-    margin: 5px;
-}
-
-button {
-    padding: 10px 15px;
-    background: #667eea;
-    color: white;
-    border: none;
-    border-radius: 7px;
-}
-
-.cards {
-    display: grid;
-    grid-template-columns:
-    repeat(auto-fit,minmax(160px,1fr));
-    gap: 12px;
-}
-
-.card {
-    background: white;
-    padding: 18px;
-    border-radius: 12px;
-    box-shadow:
-    0 4px 10px rgba(0,0,0,0.08);
-}
-
-.amount {
-    font-size: 22px;
-    font-weight: bold;
 }
 
 table {
     width: 100%;
     border-collapse: collapse;
     background: white;
-    margin-top: 20px;
 }
 
-th,
-td {
+th, td {
     padding: 12px;
     border: 1px solid #ddd;
     text-align: center;
@@ -2344,13 +2633,16 @@ th {
     color: white;
 }
 
-.baaki {
-    color: #1565c0;
-    font-weight: bold;
+.loan {
+    color: #8e44ad;
 }
 
-.wapas {
-    color: #e65100;
+.emi {
+    color: green;
+}
+
+.outstanding {
+    color: red;
     font-weight: bold;
 }
 
@@ -2372,13 +2664,384 @@ th {
 <div class="container">
 
 <h1>
-📊 Friend Saving Club Report
+📊 Member-wise Summary
 </h1>
 
 <a class="btn"
 href="/dashboard">
 ⬅ Dashboard
 </a>
+
+<br><br>
+
+<div style="overflow-x:auto;">
+
+<table>
+
+<tr>
+
+<th>
+Member
+</th>
+
+<th>
+Regular Jama
+</th>
+
+<th>
+Loan Given
+</th>
+
+<th>
+EMI Received
+</th>
+
+<th>
+Outstanding Loan
+</th>
+
+</tr>
+
+{% for r in summary %}
+
+<tr>
+
+<td>
+{{ r["name"] }}
+</td>
+
+<td>
+₹{{ "%.2f"|format(r["jama"]) }}
+</td>
+
+<td class="loan">
+₹{{ "%.2f"|format(r["loan"]) }}
+</td>
+
+<td class="emi">
+₹{{ "%.2f"|format(r["emi"]) }}
+</td>
+
+<td class="outstanding">
+₹{{ "%.2f"|format(r["outstanding"]) }}
+</td>
+
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+</div>
+
+</body>
+
+</html>
+
+"""
+
+    return render_template_string(
+        html,
+        summary=summary
+    )
+
+
+# =========================================================
+# COMPLETE REPORT
+# =========================================================
+
+@app.route("/report")
+def report():
+
+    user = current_user()
+
+    if not user:
+        return redirect(
+            url_for("login")
+        )
+
+    from_date = request.args.get(
+        "from_date"
+    )
+
+    to_date = request.args.get(
+        "to_date"
+    )
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    if from_date and to_date:
+
+        cur.execute("""
+            SELECT
+                m.id,
+                m.name,
+
+                COALESCE(
+                    (
+                        SELECT SUM(t.amount)
+                        FROM fsc_transactions t
+
+                        WHERE t.member_id = m.id
+                        AND t.transaction_type = 'jama'
+
+                        AND t.transaction_date
+                        BETWEEN %s AND %s
+                    ),
+                    0
+                ) AS jama,
+
+                COALESCE(
+                    (
+                        SELECT SUM(l.amount)
+                        FROM fsc_loans l
+
+                        WHERE l.member_id = m.id
+
+                        AND l.loan_date
+                        BETWEEN %s AND %s
+                    ),
+                    0
+                ) AS loan,
+
+                COALESCE(
+                    (
+                        SELECT SUM(e.amount)
+                        FROM fsc_loan_emi e
+
+                        WHERE e.member_id = m.id
+
+                        AND e.emi_date
+                        BETWEEN %s AND %s
+                    ),
+                    0
+                ) AS emi
+
+            FROM fsc_members m
+
+            ORDER BY m.name
+        """, (
+            from_date,
+            to_date,
+            from_date,
+            to_date,
+            from_date,
+            to_date
+        ))
+
+    else:
+
+        cur.execute("""
+            SELECT
+                m.id,
+                m.name,
+
+                COALESCE(
+                    (
+                        SELECT SUM(t.amount)
+                        FROM fsc_transactions t
+
+                        WHERE t.member_id = m.id
+                        AND t.transaction_type = 'jama'
+                    ),
+                    0
+                ) AS jama,
+
+                COALESCE(
+                    (
+                        SELECT SUM(l.amount)
+                        FROM fsc_loans l
+
+                        WHERE l.member_id = m.id
+                    ),
+                    0
+                ) AS loan,
+
+                COALESCE(
+                    (
+                        SELECT SUM(e.amount)
+                        FROM fsc_loan_emi e
+
+                        WHERE e.member_id = m.id
+                    ),
+                    0
+                ) AS emi
+
+            FROM fsc_members m
+
+            ORDER BY m.name
+        """)
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    total_jama = 0
+    total_loan = 0
+    total_emi = 0
+
+    data = []
+
+    for r in rows:
+
+        jama = float(r["jama"])
+        loan = float(r["loan"])
+        emi = float(r["emi"])
+
+        outstanding = max(
+            loan - emi,
+            0
+        )
+
+        total_jama += jama
+        total_loan += loan
+        total_emi += emi
+
+        data.append({
+            "name": r["name"],
+            "jama": jama,
+            "loan": loan,
+            "emi": emi,
+            "outstanding": outstanding
+        })
+
+    total_amount = (
+        total_jama
+        - total_loan
+        + total_emi
+    )
+
+    total_outstanding = max(
+        total_loan - total_emi,
+        0
+    )
+
+    html = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Complete Report</title>
+
+<style>
+
+body {
+    font-family: Arial;
+    background: #f4f6f9;
+}
+
+.container {
+    width: 98%;
+    max-width: 1200px;
+    margin: 20px auto;
+}
+
+.filter {
+    background: white;
+    padding: 18px;
+    border-radius: 12px;
+}
+
+input {
+    padding: 10px;
+    margin: 5px;
+}
+
+button {
+    padding: 10px 15px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 7px;
+}
+
+.cards {
+    display: grid;
+    grid-template-columns:
+    repeat(auto-fit,minmax(170px,1fr));
+    gap: 12px;
+    margin-top: 15px;
+}
+
+.card {
+    background: white;
+    padding: 18px;
+    border-radius: 12px;
+}
+
+.amount {
+    font-size: 22px;
+    font-weight: bold;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    margin-top: 20px;
+}
+
+th, td {
+    padding: 12px;
+    border: 1px solid #ddd;
+    text-align: center;
+}
+
+th {
+    background: #667eea;
+    color: white;
+}
+
+.loan {
+    color: #8e44ad;
+}
+
+.emi {
+    color: green;
+}
+
+.outstanding {
+    color: red;
+    font-weight: bold;
+}
+
+.btn {
+    display: inline-block;
+    padding: 9px 13px;
+    background: #555;
+    color: white;
+    text-decoration: none;
+    border-radius: 7px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>
+📊 Complete Report
+</h1>
+
+<a class="btn"
+href="/dashboard">
+⬅ Dashboard
+</a>
+
+<br><br>
 
 
 <div class="filter">
@@ -2396,7 +3059,6 @@ value="{{ from_date or '' }}"
 required
 >
 
-
 <label>
 To:
 </label>
@@ -2408,8 +3070,7 @@ value="{{ to_date or '' }}"
 required
 >
 
-
-<button type="submit">
+<button>
 🔍 Generate Report
 </button>
 
@@ -2423,7 +3084,7 @@ required
 <div class="card">
 
 <h3>
-💵 Total Jama
+💵 Regular Jama
 </h3>
 
 <div class="amount">
@@ -2436,11 +3097,11 @@ required
 <div class="card">
 
 <h3>
-💸 Total Payout
+🏦 Loan Given
 </h3>
 
 <div class="amount">
-₹{{ "%.2f"|format(total_payout) }}
+₹{{ "%.2f"|format(total_loan) }}
 </div>
 
 </div>
@@ -2449,37 +3110,37 @@ required
 <div class="card">
 
 <h3>
-💰 Total Amount / Balance
+💳 EMI Received
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(total_emi) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+📌 Outstanding Loan
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(total_outstanding) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+💰 Actual Group Balance
 </h3>
 
 <div class="amount">
 ₹{{ "%.2f"|format(total_amount) }}
-</div>
-
-</div>
-
-
-<div class="card">
-
-<h3>
-📌 Total Baaki
-</h3>
-
-<div class="amount baaki">
-₹{{ "%.2f"|format(total_baaki) }}
-</div>
-
-</div>
-
-
-<div class="card">
-
-<h3>
-🔄 Total Wapas
-</h3>
-
-<div class="amount wapas">
-₹{{ "%.2f"|format(total_wapas) }}
 </div>
 
 </div>
@@ -2503,29 +3164,25 @@ Member
 </th>
 
 <th>
-Jama
+Regular Jama
 </th>
 
 <th>
-Payout
+Loan Given
 </th>
 
 <th>
-Balance
+EMI Received
 </th>
 
 <th>
-Baaki
-</th>
-
-<th>
-Wapas
+Outstanding Loan
 </th>
 
 </tr>
 
 
-{% for r in report_data %}
+{% for r in data %}
 
 <tr>
 
@@ -2537,34 +3194,16 @@ Wapas
 ₹{{ "%.2f"|format(r["jama"]) }}
 </td>
 
-<td>
-₹{{ "%.2f"|format(r["payout"]) }}
+<td class="loan">
+₹{{ "%.2f"|format(r["loan"]) }}
 </td>
 
-<td>
-₹{{ "%.2f"|format(r["balance"]) }}
+<td class="emi">
+₹{{ "%.2f"|format(r["emi"]) }}
 </td>
 
-<td class="baaki">
-
-₹{{ "%.2f"|format(r["baaki"]) }}
-
-</td>
-
-<td class="wapas">
-
-₹{{ "%.2f"|format(r["wapas"]) }}
-
-</td>
-
-</tr>
-
-{% else %}
-
-<tr>
-
-<td colspan="6">
-No data found.
+<td class="outstanding">
+₹{{ "%.2f"|format(r["outstanding"]) }}
 </td>
 
 </tr>
@@ -2585,37 +3224,50 @@ No data found.
 
     return render_template_string(
         html,
-        report_data=report_data,
+        data=data,
         total_jama=total_jama,
-        total_payout=total_payout,
+        total_loan=total_loan,
+        total_emi=total_emi,
+        total_outstanding=total_outstanding,
         total_amount=total_amount,
-        total_baaki=total_baaki,
-        total_wapas=total_wapas,
         from_date=from_date,
         to_date=to_date
     )
 
 
-# =========================
+# =========================================================
 # CHANGE PASSWORD
-# =========================
+# =========================================================
 
-@app.route("/change_password", methods=["GET", "POST"])
+@app.route(
+    "/change_password",
+    methods=["GET", "POST"]
+)
 def change_password():
 
     user = current_user()
 
     if not user:
-        return redirect(url_for("login"))
+        return redirect(
+            url_for("login")
+        )
 
     message = None
     error = None
 
     if request.method == "POST":
 
-        old_password = request.form.get("old_password")
-        new_password = request.form.get("new_password")
-        confirm_password = request.form.get("confirm_password")
+        old_password = request.form.get(
+            "old_password"
+        )
+
+        new_password = request.form.get(
+            "new_password"
+        )
+
+        confirm_password = request.form.get(
+            "confirm_password"
+        )
 
         if not check_password_hash(
             user["password"],
@@ -2652,7 +3304,6 @@ def change_password():
                 user["id"]
             ))
 
-            # If member, also update member password
             if user["member_id"]:
 
                 cur.execute("""
@@ -2777,7 +3428,7 @@ placeholder="Confirm New Password"
 required
 >
 
-<button type="submit">
+<button>
 Change Password
 </button>
 
@@ -2785,7 +3436,7 @@ Change Password
 
 <p>
 <a href="/dashboard">
-⬅ Back to Dashboard
+⬅ Dashboard
 </a>
 </p>
 
@@ -2804,9 +3455,9 @@ Change Password
     )
 
 
-# =========================
-# START APP
-# =========================
+# =========================================================
+# RUN
+# =========================================================
 
 init_db()
 

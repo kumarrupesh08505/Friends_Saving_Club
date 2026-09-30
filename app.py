@@ -1,10 +1,33 @@
-from flask import Flask, request, redirect, url_for, session, render_template_string
+from flask import (
+    Flask,
+    request,
+    redirect,
+    url_for,
+    session,
+    render_template_string,
+    Response
+)
+
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.errors import UniqueViolation
+
 import os
-from datetime import datetime
-from werkzeug.security import generate_password_hash, check_password_hash
+import csv
+import io
+
+from datetime import datetime, date
+from zoneinfo import ZoneInfo
+
+from werkzeug.security import (
+    generate_password_hash,
+    check_password_hash
+)
+
+
+# =========================================================
+# APP
+# =========================================================
 
 app = Flask("FriendSavingClub")
 
@@ -13,6 +36,19 @@ app.secret_key = os.environ.get(
     "friend-saving-club-secret-2026"
 )
 
+IST = ZoneInfo("Asia/Kolkata")
+
+
+# =========================================================
+# DATE HELPER
+# =========================================================
+
+def today_india():
+
+    return datetime.now(
+        IST
+    ).strftime("%Y-%m-%d")
+
 
 # =========================================================
 # DATABASE
@@ -20,10 +56,14 @@ app.secret_key = os.environ.get(
 
 def get_conn():
 
-    database_url = os.environ.get("DATABASE_URL")
+    database_url = os.environ.get(
+        "DATABASE_URL"
+    )
 
     if not database_url:
-        raise Exception("DATABASE_URL is not set")
+        raise Exception(
+            "DATABASE_URL is not set"
+        )
 
     return psycopg.connect(
         database_url,
@@ -40,7 +80,10 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Members
+    # =====================================================
+    # MEMBERS
+    # =====================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS fsc_members (
             id SERIAL PRIMARY KEY,
@@ -52,28 +95,50 @@ def init_db():
         )
     """)
 
-    # Old / regular transactions
+    # =====================================================
+    # REGULAR TRANSACTIONS
+    # =====================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS fsc_transactions (
             id SERIAL PRIMARY KEY,
-            member_id INTEGER REFERENCES fsc_members(id) ON DELETE CASCADE,
+            member_id INTEGER
+                REFERENCES fsc_members(id)
+                ON DELETE CASCADE,
+
             transaction_type TEXT NOT NULL,
+
             amount NUMERIC(12,2) NOT NULL,
+
             transaction_date DATE NOT NULL,
+
             note TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+            created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    # Users
+    # =====================================================
+    # USERS
+    # =====================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS fsc_users (
             id SERIAL PRIMARY KEY,
+
             username TEXT UNIQUE NOT NULL,
+
             password TEXT NOT NULL,
+
             role TEXT NOT NULL,
-            member_id INTEGER REFERENCES fsc_members(id) ON DELETE CASCADE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+            member_id INTEGER
+                REFERENCES fsc_members(id)
+                ON DELETE CASCADE,
+
+            created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -86,8 +151,8 @@ def init_db():
             id SERIAL PRIMARY KEY,
 
             member_id INTEGER
-            REFERENCES fsc_members(id)
-            ON DELETE CASCADE,
+                REFERENCES fsc_members(id)
+                ON DELETE CASCADE,
 
             amount NUMERIC(12,2) NOT NULL,
 
@@ -95,7 +160,8 @@ def init_db():
 
             note TEXT,
 
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -108,12 +174,12 @@ def init_db():
             id SERIAL PRIMARY KEY,
 
             loan_id INTEGER
-            REFERENCES fsc_loans(id)
-            ON DELETE CASCADE,
+                REFERENCES fsc_loans(id)
+                ON DELETE CASCADE,
 
             member_id INTEGER
-            REFERENCES fsc_members(id)
-            ON DELETE CASCADE,
+                REFERENCES fsc_members(id)
+                ON DELETE CASCADE,
 
             amount NUMERIC(12,2) NOT NULL,
 
@@ -121,11 +187,44 @@ def init_db():
 
             note TEXT,
 
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
-    # Default admin
+    # =====================================================
+    # MONTHLY DUE
+    # =====================================================
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fsc_monthly_due (
+            id SERIAL PRIMARY KEY,
+
+            member_id INTEGER
+                REFERENCES fsc_members(id)
+                ON DELETE CASCADE,
+
+            due_month DATE NOT NULL,
+
+            saving_amount NUMERIC(12,2)
+                DEFAULT 0,
+
+            emi_amount NUMERIC(12,2)
+                DEFAULT 0,
+
+            note TEXT,
+
+            created_at TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP,
+
+            UNIQUE(member_id, due_month)
+        )
+    """)
+
+    # =====================================================
+    # DEFAULT ADMIN
+    # =====================================================
+
     cur.execute("""
         SELECT id
         FROM fsc_users
@@ -138,7 +237,12 @@ def init_db():
 
         cur.execute("""
             INSERT INTO fsc_users
-            (username, password, role)
+            (
+                username,
+                password,
+                role
+            )
+
             VALUES (%s, %s, %s)
         """, (
             "admin",
@@ -168,7 +272,9 @@ def current_user():
         SELECT *
         FROM fsc_users
         WHERE id = %s
-    """, (session["user_id"],))
+    """, (
+        session["user_id"],
+    ))
 
     user = cur.fetchone()
 
@@ -183,32 +289,9 @@ def is_admin():
     user = current_user()
 
     return bool(
-        user and user["role"] == "admin"
+        user
+        and user["role"] == "admin"
     )
-
-
-def get_member_for_user():
-
-    user = current_user()
-
-    if not user or not user["member_id"]:
-        return None
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM fsc_members
-        WHERE id = %s
-    """, (user["member_id"],))
-
-    member = cur.fetchone()
-
-    cur.close()
-    conn.close()
-
-    return member
 
 
 # =========================================================
@@ -216,6 +299,7 @@ def get_member_for_user():
 # =========================================================
 
 LOGIN_HTML = """
+
 <!DOCTYPE html>
 
 <html>
@@ -231,18 +315,34 @@ content="width=device-width, initial-scale=1">
 
 body {
     font-family: Arial;
-    background: linear-gradient(135deg,#667eea,#764ba2);
+    background:
+    linear-gradient(
+        135deg,
+        #667eea,
+        #764ba2
+    );
+
     margin: 0;
 }
 
 .box {
+
     width: 90%;
     max-width: 400px;
-    margin: 100px auto;
+
+    margin: 90px auto;
+
     background: white;
+
     padding: 30px;
-    border-radius: 15px;
+
+    border-radius: 18px;
+
     box-sizing: border-box;
+
+    box-shadow:
+    0 10px 30px
+    rgba(0,0,0,0.2);
 }
 
 h1 {
@@ -250,26 +350,43 @@ h1 {
 }
 
 input {
+
     width: 100%;
-    padding: 12px;
+
+    padding: 13px;
+
     margin: 8px 0;
+
     box-sizing: border-box;
+
     border-radius: 8px;
+
     border: 1px solid #ccc;
 }
 
 button {
+
     width: 100%;
-    padding: 12px;
+
+    padding: 13px;
+
     background: #667eea;
+
     color: white;
+
     border: none;
+
     border-radius: 8px;
+
     font-size: 16px;
+
+    cursor: pointer;
 }
 
 .error {
+
     color: red;
+
     text-align: center;
 }
 
@@ -281,10 +398,20 @@ button {
 
 <div class="box">
 
-<h1>💰 Friend Saving Club</h1>
+<h1>
+💰 Friend Saving Club
+</h1>
+
+<p style="text-align:center;color:#666;">
+Savings • Loans • EMI • Reports
+</p>
 
 {% if error %}
-<p class="error">{{ error }}</p>
+
+<p class="error">
+{{ error }}
+</p>
+
 {% endif %}
 
 <form method="POST">
@@ -302,7 +429,7 @@ placeholder="Password"
 required
 >
 
-<button type="submit">
+<button>
 Login
 </button>
 
@@ -313,16 +440,25 @@ Login
 </body>
 
 </html>
+
 """
 
 
-@app.route("/", methods=["GET", "POST"])
+@app.route(
+    "/",
+    methods=["GET", "POST"]
+)
 def login():
 
     if request.method == "POST":
 
-        username = request.form.get("username")
-        password = request.form.get("password")
+        username = request.form.get(
+            "username"
+        )
+
+        password = request.form.get(
+            "password"
+        )
 
         conn = get_conn()
         cur = conn.cursor()
@@ -331,19 +467,25 @@ def login():
             SELECT *
             FROM fsc_users
             WHERE username = %s
-        """, (username,))
+        """, (
+            username,
+        ))
 
         user = cur.fetchone()
 
         cur.close()
         conn.close()
 
-        if user and check_password_hash(
-            user["password"],
-            password
+        if (
+            user
+            and check_password_hash(
+                user["password"],
+                password
+            )
         ):
 
             session["user_id"] = user["id"]
+
             session["role"] = user["role"]
 
             return redirect(
@@ -385,6 +527,7 @@ def dashboard():
     user = current_user()
 
     if not user:
+
         return redirect(
             url_for("login")
         )
@@ -392,11 +535,15 @@ def dashboard():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Regular savings
+    # =====================================================
+    # TOTAL JAMA
+    # =====================================================
+
     cur.execute("""
         SELECT
             COALESCE(
-                SUM(amount), 0
+                SUM(amount),
+                0
             ) AS total_jama
 
         FROM fsc_transactions
@@ -408,11 +555,15 @@ def dashboard():
         cur.fetchone()["total_jama"]
     )
 
-    # Loan given
+    # =====================================================
+    # TOTAL LOAN
+    # =====================================================
+
     cur.execute("""
         SELECT
             COALESCE(
-                SUM(amount), 0
+                SUM(amount),
+                0
             ) AS total_loan
 
         FROM fsc_loans
@@ -422,11 +573,15 @@ def dashboard():
         cur.fetchone()["total_loan"]
     )
 
-    # EMI received
+    # =====================================================
+    # TOTAL EMI
+    # =====================================================
+
     cur.execute("""
         SELECT
             COALESCE(
-                SUM(amount), 0
+                SUM(amount),
+                0
             ) AS total_emi
 
         FROM fsc_loan_emi
@@ -436,26 +591,164 @@ def dashboard():
         cur.fetchone()["total_emi"]
     )
 
-    # Actual group balance
+    # =====================================================
+    # GROUP BALANCE
+    # =====================================================
+
     total_amount = (
         total_jama
         - total_loan
         + total_emi
     )
 
-    # Outstanding loan
-    outstanding_loan = (
-        total_loan
-        - total_emi
+    outstanding_loan = max(
+        total_loan - total_emi,
+        0
     )
 
-    # Members
+    # =====================================================
+    # MEMBER COUNT
+    # =====================================================
+
     cur.execute("""
         SELECT COUNT(*) AS count
         FROM fsc_members
     """)
 
     member_count = cur.fetchone()["count"]
+
+    # =====================================================
+    # CURRENT MONTH
+    # =====================================================
+
+    current_month = datetime.now(
+        IST
+    ).strftime("%Y-%m-01")
+
+    # =====================================================
+    # CURRENT MONTH SAVING
+    # =====================================================
+
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS amount
+
+        FROM fsc_transactions
+
+        WHERE transaction_type = 'jama'
+
+        AND DATE_TRUNC(
+            'month',
+            transaction_date
+        )
+        =
+        DATE_TRUNC(
+            'month',
+            %s::date
+        )
+    """, (
+        current_month,
+    ))
+
+    current_month_saving = float(
+        cur.fetchone()["amount"]
+    )
+
+    # =====================================================
+    # CURRENT MONTH LOAN
+    # =====================================================
+
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS amount
+
+        FROM fsc_loans
+
+        WHERE DATE_TRUNC(
+            'month',
+            loan_date
+        )
+        =
+        DATE_TRUNC(
+            'month',
+            %s::date
+        )
+    """, (
+        current_month,
+    ))
+
+    current_month_loan = float(
+        cur.fetchone()["amount"]
+    )
+
+    # =====================================================
+    # CURRENT MONTH EMI
+    # =====================================================
+
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS amount
+
+        FROM fsc_loan_emi
+
+        WHERE DATE_TRUNC(
+            'month',
+            emi_date
+        )
+        =
+        DATE_TRUNC(
+            'month',
+            %s::date
+        )
+    """, (
+        current_month,
+    ))
+
+    current_month_emi = float(
+        cur.fetchone()["amount"]
+    )
+
+    # =====================================================
+    # CURRENT MONTH DUE
+    # =====================================================
+
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(saving_amount),
+                0
+            ) AS saving,
+
+            COALESCE(
+                SUM(emi_amount),
+                0
+            ) AS emi
+
+        FROM fsc_monthly_due
+
+        WHERE due_month = %s
+    """, (
+        current_month,
+    ))
+
+    due = cur.fetchone()
+
+    monthly_due_saving = float(
+        due["saving"]
+    )
+
+    monthly_due_emi = float(
+        due["emi"]
+    )
 
     cur.close()
     conn.close()
@@ -476,69 +769,135 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
+
     margin: 0;
 }
 
 .header {
-    background: linear-gradient(135deg,#667eea,#764ba2);
+
+    background:
+    linear-gradient(
+        135deg,
+        #667eea,
+        #764ba2
+    );
+
     color: white;
+
     padding: 20px;
 }
 
 .logout {
+
     float: right;
+
     color: white;
+
     text-decoration: none;
+
+    background:
+    rgba(255,255,255,0.15);
+
+    padding: 8px 12px;
+
+    border-radius: 7px;
 }
 
 .container {
+
     width: 94%;
-    max-width: 1100px;
+
+    max-width: 1200px;
+
     margin: 20px auto;
 }
 
 .cards {
+
     display: grid;
+
     grid-template-columns:
-    repeat(auto-fit,minmax(180px,1fr));
+    repeat(
+        auto-fit,
+        minmax(180px,1fr)
+    );
+
     gap: 15px;
 }
 
 .card {
+
     background: white;
+
     padding: 20px;
+
     border-radius: 14px;
+
     box-shadow:
-    0 5px 15px rgba(0,0,0,0.08);
+    0 5px 15px
+    rgba(0,0,0,0.08);
 }
 
 .card h3 {
+
     color: #555;
+
+    margin-top: 0;
 }
 
 .amount {
+
     font-size: 24px;
+
     font-weight: bold;
 }
 
 .menu {
+
     margin-top: 25px;
+
     display: grid;
+
     grid-template-columns:
-    repeat(auto-fit,minmax(180px,1fr));
+    repeat(
+        auto-fit,
+        minmax(190px,1fr)
+    );
+
     gap: 12px;
 }
 
 .menu a {
+
     background: white;
-    padding: 15px;
+
+    padding: 16px;
+
     border-radius: 10px;
+
     text-decoration: none;
+
     color: #333;
+
     box-shadow:
-    0 4px 10px rgba(0,0,0,0.08);
+    0 4px 10px
+    rgba(0,0,0,0.08);
+}
+
+.menu a:hover {
+
+    transform: translateY(-2px);
+
+}
+
+.section-title {
+
+    margin-top: 30px;
+
 }
 
 </style>
@@ -549,7 +908,8 @@ body {
 
 <div class="header">
 
-<a class="logout"
+<a
+class="logout"
 href="/logout">
 Logout
 </a>
@@ -567,26 +927,30 @@ Welcome, {{ user["username"] }}
 
 <div class="container">
 
+<h2 class="section-title">
+📊 Overall Summary
+</h2>
+
 <div class="cards">
 
 <div class="card">
 
-<h3>💵 Regular Jama</h3>
+<h3>
+💵 Regular Jama
+</h3>
 
 <div class="amount">
 ₹{{ "%.2f"|format(total_jama) }}
 </div>
 
-<p>
-Monthly Saving
-</p>
-
 </div>
 
 
 <div class="card">
 
-<h3>🏦 Loan Given</h3>
+<h3>
+🏦 Loan Given
+</h3>
 
 <div class="amount">
 ₹{{ "%.2f"|format(total_loan) }}
@@ -597,7 +961,9 @@ Monthly Saving
 
 <div class="card">
 
-<h3>💳 EMI Received</h3>
+<h3>
+💳 EMI Received
+</h3>
 
 <div class="amount">
 ₹{{ "%.2f"|format(total_emi) }}
@@ -608,7 +974,9 @@ Monthly Saving
 
 <div class="card">
 
-<h3>📌 Outstanding Loan</h3>
+<h3>
+📌 Outstanding Loan
+</h3>
 
 <div class="amount">
 ₹{{ "%.2f"|format(outstanding_loan) }}
@@ -619,7 +987,9 @@ Monthly Saving
 
 <div class="card">
 
-<h3>💰 Actual Group Balance</h3>
+<h3>
+💰 Actual Group Balance
+</h3>
 
 <div class="amount">
 ₹{{ "%.2f"|format(total_amount) }}
@@ -630,7 +1000,9 @@ Monthly Saving
 
 <div class="card">
 
-<h3>👥 Members</h3>
+<h3>
+👥 Members
+</h3>
 
 <div class="amount">
 {{ member_count }}
@@ -641,37 +1013,116 @@ Monthly Saving
 </div>
 
 
+<h2 class="section-title">
+📅 Current Month
+</h2>
+
+<div class="cards">
+
+<div class="card">
+
+<h3>
+💵 This Month Saving
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(current_month_saving) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+🏦 This Month Loan
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(current_month_loan) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+💳 This Month EMI
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(current_month_emi) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+📅 Saving Due
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(monthly_due_saving) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+📅 EMI Due
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(monthly_due_emi) }}
+</div>
+
+</div>
+
+</div>
+
+
+<h2 class="section-title">
+⚙️ Menu
+</h2>
+
 <div class="menu">
 
 <a href="/members">
 👥 All Members
 </a>
 
-
 <a href="/member_summary">
 📊 Member Summary
 </a>
-
 
 <a href="/savings">
 💵 Saving History
 </a>
 
-
 <a href="/loans">
 🏦 Loan History
 </a>
-
 
 <a href="/emi">
 💳 EMI History
 </a>
 
-
 <a href="/report">
 📊 Complete Report
 </a>
 
+<a href="/due_summary">
+📌 Due Summary
+</a>
+
+<a href="/monthly_dashboard">
+📈 Monthly Dashboard
+</a>
 
 {% if user["role"] == "admin" %}
 
@@ -679,23 +1130,23 @@ Monthly Saving
 ➕ Add Member
 </a>
 
-
 <a href="/add_saving">
 ➕ Add Monthly Saving
 </a>
-
 
 <a href="/add_loan">
 🏦 Give Loan
 </a>
 
-
 <a href="/add_emi">
 💳 Receive EMI
 </a>
 
-{% endif %}
+<a href="/monthly_due">
+📅 Monthly Due Amount
+</a>
 
+{% endif %}
 
 <a href="/change_password">
 🔐 Change Password
@@ -719,7 +1170,12 @@ Monthly Saving
         total_emi=total_emi,
         outstanding_loan=outstanding_loan,
         total_amount=total_amount,
-        member_count=member_count
+        member_count=member_count,
+        current_month_saving=current_month_saving,
+        current_month_loan=current_month_loan,
+        current_month_emi=current_month_emi,
+        monthly_due_saving=monthly_due_saving,
+        monthly_due_emi=monthly_due_emi
     )
 
 
@@ -767,37 +1223,61 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .container {
+
     width: 94%;
+
     max-width: 1000px;
+
     margin: 20px auto;
 }
 
 .card {
+
     background: white;
+
     padding: 18px;
+
     margin-bottom: 12px;
+
     border-radius: 12px;
+
     box-shadow:
-    0 4px 10px rgba(0,0,0,0.08);
+    0 4px 10px
+    rgba(0,0,0,0.08);
 }
 
 .btn {
+
     display: inline-block;
+
     padding: 9px 13px;
+
     background: #667eea;
+
     color: white;
+
     border-radius: 7px;
+
     text-decoration: none;
+
     margin: 3px;
 }
 
 .delete {
+
     background: #e74c3c;
+}
+
+.detail {
+
+    background: #16a085;
 }
 
 </style>
@@ -808,7 +1288,9 @@ body {
 
 <div class="container">
 
-<h1>👥 All Members</h1>
+<h1>
+👥 All Members
+</h1>
 
 <a class="btn"
 href="/dashboard">
@@ -826,7 +1308,6 @@ href="/add_member">
 
 <hr>
 
-
 {% for m in members %}
 
 <div class="card">
@@ -836,22 +1317,31 @@ href="/add_member">
 </h2>
 
 <p>
-Username: {{ m["username"] }}
+👤 Username:
+{{ m["username"] }}
 </p>
 
 <p>
-Phone: {{ m["phone"] or "-" }}
+📱 Phone:
+{{ m["phone"] or "-" }}
 </p>
 
+<a
+class="btn detail"
+href="/member_detail/{{ m["id"] }}">
+📊 View Details
+</a>
 
 {% if user["role"] == "admin" %}
 
-<a class="btn"
+<a
+class="btn"
 href="/edit_member/{{ m["id"] }}">
 ✏ Edit
 </a>
 
-<a class="btn delete"
+<a
+class="btn delete"
 href="/delete_member/{{ m["id"] }}"
 onclick="return confirm('Delete this member?')">
 🗑 Delete
@@ -882,7 +1372,10 @@ onclick="return confirm('Delete this member?')">
 # ADD MEMBER
 # =========================================================
 
-@app.route("/add_member", methods=["GET", "POST"])
+@app.route(
+    "/add_member",
+    methods=["GET", "POST"]
+)
 def add_member():
 
     if not is_admin():
@@ -893,24 +1386,40 @@ def add_member():
     if request.method == "POST":
 
         name = request.form.get("name")
-        username = request.form.get("username")
-        password = request.form.get("password")
-        phone = request.form.get("phone")
+
+        username = request.form.get(
+            "username"
+        )
+
+        password = request.form.get(
+            "password"
+        )
+
+        phone = request.form.get(
+            "phone"
+        )
 
         conn = get_conn()
         cur = conn.cursor()
 
         try:
 
-            hashed_password = generate_password_hash(
-                password
+            hashed_password = (
+                generate_password_hash(
+                    password
+                )
             )
 
             cur.execute("""
                 INSERT INTO fsc_members
-                (name, username, password, phone)
+                (
+                    name,
+                    username,
+                    password,
+                    phone
+                )
 
-                VALUES (%s, %s, %s, %s)
+                VALUES (%s,%s,%s,%s)
 
                 RETURNING id
             """, (
@@ -924,9 +1433,14 @@ def add_member():
 
             cur.execute("""
                 INSERT INTO fsc_users
-                (username, password, role, member_id)
+                (
+                    username,
+                    password,
+                    role,
+                    member_id
+                )
 
-                VALUES (%s, %s, %s, %s)
+                VALUES (%s,%s,%s,%s)
             """, (
                 username,
                 hashed_password,
@@ -944,7 +1458,10 @@ def add_member():
             conn.close()
 
             return """
-            <h2>Username already exists.</h2>
+            <h2>
+            Username already exists.
+            </h2>
+
             <a href="/add_member">
             Go Back
             </a>
@@ -973,32 +1490,50 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .box {
+
     width: 94%;
+
     max-width: 500px;
+
     margin: 30px auto;
+
     background: white;
+
     padding: 25px;
+
     border-radius: 14px;
 }
 
 input {
+
     width: 100%;
+
     padding: 12px;
+
     margin: 8px 0;
+
     box-sizing: border-box;
 }
 
 button {
+
     width: 100%;
+
     padding: 12px;
+
     background: #667eea;
+
     color: white;
+
     border: none;
+
     border-radius: 8px;
 }
 
@@ -1010,7 +1545,9 @@ button {
 
 <div class="box">
 
-<h1>➕ Add Member</h1>
+<h1>
+➕ Add Member
+</h1>
 
 <form method="POST">
 
@@ -1035,7 +1572,7 @@ required
 
 <input
 name="phone"
-placeholder="Phone"
+placeholder="Phone Number"
 >
 
 <button>
@@ -1067,7 +1604,10 @@ Add Member
 # EDIT MEMBER
 # =========================================================
 
-@app.route("/edit_member/<int:id>", methods=["GET", "POST"])
+@app.route(
+    "/edit_member/<int:id>",
+    methods=["GET", "POST"]
+)
 def edit_member(id):
 
     if not is_admin():
@@ -1082,7 +1622,9 @@ def edit_member(id):
         SELECT *
         FROM fsc_members
         WHERE id = %s
-    """, (id,))
+    """, (
+        id,
+    ))
 
     member = cur.fetchone()
 
@@ -1096,36 +1638,62 @@ def edit_member(id):
     if request.method == "POST":
 
         name = request.form.get("name")
-        username = request.form.get("username")
-        phone = request.form.get("phone")
 
-        cur.execute("""
-            UPDATE fsc_members
+        username = request.form.get(
+            "username"
+        )
 
-            SET name = %s,
-                username = %s,
-                phone = %s
+        phone = request.form.get(
+            "phone"
+        )
 
-            WHERE id = %s
-        """, (
-            name,
-            username,
-            phone,
-            id
-        ))
+        try:
 
-        cur.execute("""
-            UPDATE fsc_users
+            cur.execute("""
+                UPDATE fsc_members
 
-            SET username = %s
+                SET
+                    name = %s,
+                    username = %s,
+                    phone = %s
 
-            WHERE member_id = %s
-        """, (
-            username,
-            id
-        ))
+                WHERE id = %s
+            """, (
+                name,
+                username,
+                phone,
+                id
+            ))
 
-        conn.commit()
+            cur.execute("""
+                UPDATE fsc_users
+
+                SET username = %s
+
+                WHERE member_id = %s
+            """, (
+                username,
+                id
+            ))
+
+            conn.commit()
+
+        except UniqueViolation:
+
+            conn.rollback()
+
+            cur.close()
+            conn.close()
+
+            return """
+            <h2>
+            Username already exists.
+            </h2>
+
+            <a href="/members">
+            Back
+            </a>
+            """
 
         cur.close()
         conn.close()
@@ -1153,32 +1721,50 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .box {
+
     width: 94%;
+
     max-width: 500px;
+
     margin: 30px auto;
+
     background: white;
+
     padding: 25px;
+
     border-radius: 14px;
 }
 
 input {
+
     width: 100%;
+
     padding: 12px;
+
     margin: 8px 0;
+
     box-sizing: border-box;
 }
 
 button {
+
     width: 100%;
+
     padding: 12px;
+
     background: #667eea;
+
     color: white;
+
     border: none;
+
     border-radius: 8px;
 }
 
@@ -1190,7 +1776,9 @@ button {
 
 <div class="box">
 
-<h1>✏ Edit Member</h1>
+<h1>
+✏ Edit Member
+</h1>
 
 <form method="POST">
 
@@ -1241,7 +1829,9 @@ Update
 # DELETE MEMBER
 # =========================================================
 
-@app.route("/delete_member/<int:id>")
+@app.route(
+    "/delete_member/<int:id>"
+)
 def delete_member(id):
 
     if not is_admin():
@@ -1254,8 +1844,11 @@ def delete_member(id):
 
     cur.execute("""
         DELETE FROM fsc_members
+
         WHERE id = %s
-    """, (id,))
+    """, (
+        id,
+    ))
 
     conn.commit()
 
@@ -1268,10 +1861,622 @@ def delete_member(id):
 
 
 # =========================================================
-# ADD MONTHLY SAVING
+# MEMBER DETAIL
 # =========================================================
 
-@app.route("/add_saving", methods=["GET", "POST"])
+@app.route(
+    "/member_detail/<int:id>"
+)
+def member_detail(id):
+
+    user = current_user()
+
+    if not user:
+        return redirect(
+            url_for("login")
+        )
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # Member
+    cur.execute("""
+        SELECT *
+        FROM fsc_members
+        WHERE id = %s
+    """, (
+        id,
+    ))
+
+    member = cur.fetchone()
+
+    if not member:
+
+        cur.close()
+        conn.close()
+
+        return "Member not found"
+
+    # Jama
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS amount
+
+        FROM fsc_transactions
+
+        WHERE member_id = %s
+
+        AND transaction_type = 'jama'
+    """, (
+        id,
+    ))
+
+    jama = float(
+        cur.fetchone()["amount"]
+    )
+
+    # Loan
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS amount
+
+        FROM fsc_loans
+
+        WHERE member_id = %s
+    """, (
+        id,
+    ))
+
+    loan = float(
+        cur.fetchone()["amount"]
+    )
+
+    # EMI
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS amount
+
+        FROM fsc_loan_emi
+
+        WHERE member_id = %s
+    """, (
+        id,
+    ))
+
+    emi = float(
+        cur.fetchone()["amount"]
+    )
+
+    outstanding = max(
+        loan - emi,
+        0
+    )
+
+    # Transactions
+    cur.execute("""
+        SELECT
+            t.id,
+            t.amount,
+            t.transaction_date,
+            t.note
+
+        FROM fsc_transactions t
+
+        WHERE t.member_id = %s
+
+        AND t.transaction_type = 'jama'
+
+        ORDER BY
+            t.transaction_date DESC,
+            t.id DESC
+    """, (
+        id,
+    ))
+
+    savings = cur.fetchall()
+
+    # Loans
+    cur.execute("""
+        SELECT
+            l.id,
+            l.amount,
+            l.loan_date,
+            l.note
+
+        FROM fsc_loans l
+
+        WHERE l.member_id = %s
+
+        ORDER BY
+            l.loan_date DESC,
+            l.id DESC
+    """, (
+        id,
+    ))
+
+    loans = cur.fetchall()
+
+    # EMI
+    cur.execute("""
+        SELECT
+            e.id,
+            e.amount,
+            e.emi_date,
+            e.note
+
+        FROM fsc_loan_emi e
+
+        WHERE e.member_id = %s
+
+        ORDER BY
+            e.emi_date DESC,
+            e.id DESC
+    """, (
+        id,
+    ))
+
+    emis = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    html = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Member Detail</title>
+
+<style>
+
+body {
+
+    font-family: Arial;
+
+    background: #f4f6f9;
+}
+
+.container {
+
+    width: 94%;
+
+    max-width: 1100px;
+
+    margin: 20px auto;
+}
+
+.profile {
+
+    background:
+    linear-gradient(
+        135deg,
+        #667eea,
+        #764ba2
+    );
+
+    color: white;
+
+    padding: 22px;
+
+    border-radius: 15px;
+}
+
+.cards {
+
+    display: grid;
+
+    grid-template-columns:
+    repeat(
+        auto-fit,
+        minmax(180px,1fr)
+    );
+
+    gap: 12px;
+
+    margin-top: 15px;
+}
+
+.card {
+
+    background: white;
+
+    padding: 18px;
+
+    border-radius: 12px;
+
+    box-shadow:
+    0 4px 10px
+    rgba(0,0,0,0.08);
+}
+
+.amount {
+
+    font-size: 22px;
+
+    font-weight: bold;
+}
+
+table {
+
+    width: 100%;
+
+    border-collapse: collapse;
+
+    background: white;
+
+    margin-top: 12px;
+}
+
+th, td {
+
+    padding: 10px;
+
+    border: 1px solid #ddd;
+
+    text-align: center;
+}
+
+th {
+
+    background: #667eea;
+
+    color: white;
+}
+
+.section {
+
+    margin-top: 25px;
+}
+
+.btn {
+
+    display: inline-block;
+
+    padding: 9px 13px;
+
+    background: #555;
+
+    color: white;
+
+    text-decoration: none;
+
+    border-radius: 7px;
+
+    margin-top: 10px;
+}
+
+.green {
+
+    color: green;
+
+    font-weight: bold;
+}
+
+.red {
+
+    color: red;
+
+    font-weight: bold;
+}
+
+.purple {
+
+    color: #8e44ad;
+
+    font-weight: bold;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<div class="profile">
+
+<h1>
+{{ member["name"] }}
+</h1>
+
+<p>
+👤 Username:
+{{ member["username"] }}
+</p>
+
+<p>
+📱 Phone:
+{{ member["phone"] or "-" }}
+</p>
+
+<a
+class="btn"
+style="background:white;color:#333;"
+href="/members">
+⬅ Members
+</a>
+
+</div>
+
+
+<div class="cards">
+
+<div class="card">
+
+<h3>
+💵 Regular Jama
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(jama) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+🏦 Loan Given
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(loan) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+💳 EMI Received
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(emi) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+📌 Outstanding
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(outstanding) }}
+</div>
+
+</div>
+
+</div>
+
+
+<div class="section">
+
+<h2>
+💵 Saving History
+</h2>
+
+<div style="overflow-x:auto;">
+
+<table>
+
+<tr>
+
+<th>
+Date
+</th>
+
+<th>
+Amount
+</th>
+
+<th>
+Note
+</th>
+
+{% if user["role"] == "admin" %}
+<th>
+Action
+</th>
+{% endif %}
+
+</tr>
+
+{% for s in savings %}
+
+<tr>
+
+<td>
+{{ s["transaction_date"] }}
+</td>
+
+<td class="green">
+₹{{ "%.2f"|format(s["amount"]|float) }}
+</td>
+
+<td>
+{{ s["note"] or "-" }}
+</td>
+
+{% if user["role"] == "admin" %}
+
+<td>
+
+<a href="/edit_saving/{{ s["id"] }}">
+✏ Edit
+</a>
+
+</td>
+
+{% endif %}
+
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+</div>
+
+
+<div class="section">
+
+<h2>
+🏦 Loan History
+</h2>
+
+<div style="overflow-x:auto;">
+
+<table>
+
+<tr>
+
+<th>
+Date
+</th>
+
+<th>
+Loan
+</th>
+
+<th>
+Note
+</th>
+
+</tr>
+
+{% for l in loans %}
+
+<tr>
+
+<td>
+{{ l["loan_date"] }}
+</td>
+
+<td class="purple">
+₹{{ "%.2f"|format(l["amount"]|float) }}
+</td>
+
+<td>
+{{ l["note"] or "-" }}
+</td>
+
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+</div>
+
+
+<div class="section">
+
+<h2>
+💳 EMI History
+</h2>
+
+<div style="overflow-x:auto;">
+
+<table>
+
+<tr>
+
+<th>
+Date
+</th>
+
+<th>
+EMI
+</th>
+
+<th>
+Note
+</th>
+
+</tr>
+
+{% for e in emis %}
+
+<tr>
+
+<td>
+{{ e["emi_date"] }}
+</td>
+
+<td class="green">
+₹{{ "%.2f"|format(e["amount"]|float) }}
+</td>
+
+<td>
+{{ e["note"] or "-" }}
+</td>
+
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+</div>
+
+</div>
+
+</body>
+
+</html>
+
+"""
+
+    return render_template_string(
+        html,
+        member=member,
+        jama=jama,
+        loan=loan,
+        emi=emi,
+        outstanding=outstanding,
+        savings=savings,
+        loans=loans,
+        emis=emis,
+        user=user
+    )
+
+
+# =========================================================
+# ADD SAVING
+# =========================================================
+
+@app.route(
+    "/add_saving",
+    methods=["GET", "POST"]
+)
 def add_saving():
 
     if not is_admin():
@@ -1283,8 +2488,12 @@ def add_saving():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT id, name
+        SELECT
+            id,
+            name
+
         FROM fsc_members
+
         ORDER BY name
     """)
 
@@ -1292,12 +2501,21 @@ def add_saving():
 
     if request.method == "POST":
 
-        member_id = request.form.get("member_id")
-        amount = request.form.get("amount")
+        member_id = request.form.get(
+            "member_id"
+        )
+
+        amount = request.form.get(
+            "amount"
+        )
+
         transaction_date = request.form.get(
             "transaction_date"
         )
-        note = request.form.get("note")
+
+        note = request.form.get(
+            "note"
+        )
 
         cur.execute("""
             INSERT INTO fsc_transactions
@@ -1309,7 +2527,14 @@ def add_saving():
                 note
             )
 
-            VALUES (%s, 'jama', %s, %s, %s)
+            VALUES
+            (
+                %s,
+                'jama',
+                %s,
+                %s,
+                %s
+            )
         """, (
             member_id,
             amount,
@@ -1345,32 +2570,50 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .box {
+
     width: 94%;
+
     max-width: 500px;
+
     margin: 30px auto;
+
     background: white;
+
     padding: 25px;
+
     border-radius: 14px;
 }
 
 input, select, textarea {
+
     width: 100%;
+
     padding: 12px;
+
     margin: 8px 0;
+
     box-sizing: border-box;
 }
 
 button {
+
     width: 100%;
+
     padding: 12px;
+
     background: #667eea;
+
     color: white;
+
     border: none;
+
     border-radius: 8px;
 }
 
@@ -1382,11 +2625,16 @@ button {
 
 <div class="box">
 
-<h1>💵 Monthly Saving</h1>
+<h1>
+💵 Add Monthly Saving
+</h1>
 
 <form method="POST">
 
-<select name="member_id" required>
+<select
+name="member_id"
+required
+>
 
 <option value="">
 Select Member
@@ -1445,9 +2693,7 @@ Save Monthly Jama
     return render_template_string(
         html,
         members=members,
-        today=datetime.now().strftime(
-            "%Y-%m-%d"
-        )
+        today=today_india()
     )
 
 
@@ -1506,38 +2752,58 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .container {
+
     width: 94%;
-    max-width: 1000px;
+
+    max-width: 1100px;
+
     margin: 20px auto;
 }
 
 .card {
+
     background: white;
+
     padding: 15px;
+
     margin-bottom: 10px;
+
     border-radius: 10px;
 }
 
 .green {
+
     color: green;
+
     font-weight: bold;
 }
 
 .btn {
+
     display: inline-block;
+
     padding: 8px 12px;
+
     background: #667eea;
+
     color: white;
+
     text-decoration: none;
+
     border-radius: 6px;
+
+    margin: 3px;
 }
 
 .red {
+
     background: #e74c3c;
 }
 
@@ -1549,7 +2815,9 @@ body {
 
 <div class="container">
 
-<h1>💵 Monthly Saving History</h1>
+<h1>
+💵 Monthly Saving History
+</h1>
 
 <a class="btn"
 href="/dashboard">
@@ -1588,10 +2856,16 @@ href="/add_saving">
 📝 {{ s["note"] or "-" }}
 </p>
 
-
 {% if user["role"] == "admin" %}
 
-<a class="btn red"
+<a
+class="btn"
+href="/edit_saving/{{ s["id"] }}">
+✏ Edit
+</a>
+
+<a
+class="btn red"
 href="/delete_saving/{{ s["id"] }}"
 onclick="return confirm('Delete this saving?')">
 🗑 Delete
@@ -1619,10 +2893,217 @@ onclick="return confirm('Delete this saving?')">
 
 
 # =========================================================
+# EDIT SAVING
+# =========================================================
+
+@app.route(
+    "/edit_saving/<int:id>",
+    methods=["GET", "POST"]
+)
+def edit_saving(id):
+
+    if not is_admin():
+        return redirect(
+            url_for("dashboard")
+        )
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM fsc_transactions
+
+        WHERE id = %s
+
+        AND transaction_type = 'jama'
+    """, (
+        id,
+    ))
+
+    saving = cur.fetchone()
+
+    if not saving:
+
+        cur.close()
+        conn.close()
+
+        return "Saving transaction not found"
+
+    if request.method == "POST":
+
+        amount = request.form.get(
+            "amount"
+        )
+
+        transaction_date = request.form.get(
+            "transaction_date"
+        )
+
+        note = request.form.get(
+            "note"
+        )
+
+        cur.execute("""
+            UPDATE fsc_transactions
+
+            SET
+                amount = %s,
+                transaction_date = %s,
+                note = %s
+
+            WHERE id = %s
+
+            AND transaction_type = 'jama'
+        """, (
+            amount,
+            transaction_date,
+            note,
+            id
+        ))
+
+        conn.commit()
+
+        cur.close()
+        conn.close()
+
+        return redirect(
+            url_for("savings")
+        )
+
+    cur.close()
+    conn.close()
+
+    html = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Edit Saving</title>
+
+<style>
+
+body {
+
+    font-family: Arial;
+
+    background: #f4f6f9;
+}
+
+.box {
+
+    width: 94%;
+
+    max-width: 500px;
+
+    margin: 30px auto;
+
+    background: white;
+
+    padding: 25px;
+
+    border-radius: 14px;
+}
+
+input, textarea {
+
+    width: 100%;
+
+    padding: 12px;
+
+    margin: 8px 0;
+
+    box-sizing: border-box;
+}
+
+button {
+
+    width: 100%;
+
+    padding: 12px;
+
+    background: #667eea;
+
+    color: white;
+
+    border: none;
+
+    border-radius: 8px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="box">
+
+<h1>
+✏ Edit Saving
+</h1>
+
+<form method="POST">
+
+<input
+type="number"
+step="0.01"
+name="amount"
+value="{{ saving["amount"] }}"
+required
+>
+
+<input
+type="date"
+name="transaction_date"
+value="{{ saving["transaction_date"] }}"
+required
+>
+
+<textarea
+name="note"
+placeholder="Note"
+>{{ saving["note"] or "" }}</textarea>
+
+<button>
+Update Saving
+</button>
+
+</form>
+
+<p>
+<a href="/savings">
+⬅ Back
+</a>
+</p>
+
+</div>
+
+</body>
+
+</html>
+
+"""
+
+    return render_template_string(
+        html,
+        saving=saving
+    )
+
+
+# =========================================================
 # DELETE SAVING
 # =========================================================
 
-@app.route("/delete_saving/<int:id>")
+@app.route(
+    "/delete_saving/<int:id>"
+)
 def delete_saving(id):
 
     if not is_admin():
@@ -1635,9 +3116,13 @@ def delete_saving(id):
 
     cur.execute("""
         DELETE FROM fsc_transactions
+
         WHERE id = %s
+
         AND transaction_type = 'jama'
-    """, (id,))
+    """, (
+        id,
+    ))
 
     conn.commit()
 
@@ -1653,7 +3138,10 @@ def delete_saving(id):
 # ADD LOAN
 # =========================================================
 
-@app.route("/add_loan", methods=["GET", "POST"])
+@app.route(
+    "/add_loan",
+    methods=["GET", "POST"]
+)
 def add_loan():
 
     if not is_admin():
@@ -1665,8 +3153,12 @@ def add_loan():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT id, name
+        SELECT
+            id,
+            name
+
         FROM fsc_members
+
         ORDER BY name
     """)
 
@@ -1674,10 +3166,21 @@ def add_loan():
 
     if request.method == "POST":
 
-        member_id = request.form.get("member_id")
-        amount = request.form.get("amount")
-        loan_date = request.form.get("loan_date")
-        note = request.form.get("note")
+        member_id = request.form.get(
+            "member_id"
+        )
+
+        amount = request.form.get(
+            "amount"
+        )
+
+        loan_date = request.form.get(
+            "loan_date"
+        )
+
+        note = request.form.get(
+            "note"
+        )
 
         cur.execute("""
             INSERT INTO fsc_loans
@@ -1688,7 +3191,13 @@ def add_loan():
                 note
             )
 
-            VALUES (%s, %s, %s, %s)
+            VALUES
+            (
+                %s,
+                %s,
+                %s,
+                %s
+            )
         """, (
             member_id,
             amount,
@@ -1724,32 +3233,50 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .box {
+
     width: 94%;
+
     max-width: 500px;
+
     margin: 30px auto;
+
     background: white;
+
     padding: 25px;
+
     border-radius: 14px;
 }
 
 input, select, textarea {
+
     width: 100%;
+
     padding: 12px;
+
     margin: 8px 0;
+
     box-sizing: border-box;
 }
 
 button {
+
     width: 100%;
+
     padding: 12px;
+
     background: #667eea;
+
     color: white;
+
     border: none;
+
     border-radius: 8px;
 }
 
@@ -1761,11 +3288,16 @@ button {
 
 <div class="box">
 
-<h1>🏦 Give Loan</h1>
+<h1>
+🏦 Give Loan
+</h1>
 
 <form method="POST">
 
-<select name="member_id" required>
+<select
+name="member_id"
+required
+>
 
 <option value="">
 Select Member
@@ -1824,9 +3356,7 @@ Save Loan
     return render_template_string(
         html,
         members=members,
-        today=datetime.now().strftime(
-            "%Y-%m-%d"
-        )
+        today=today_india()
     )
 
 
@@ -1855,7 +3385,9 @@ def loans():
             COALESCE(
                 (
                     SELECT SUM(e.amount)
+
                     FROM fsc_loan_emi e
+
                     WHERE e.loan_id = l.id
                 ),
                 0
@@ -1892,49 +3424,72 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .container {
+
     width: 94%;
+
     max-width: 1100px;
+
     margin: 20px auto;
 }
 
 .card {
+
     background: white;
+
     padding: 18px;
+
     margin-bottom: 12px;
+
     border-radius: 12px;
 }
 
 .loan {
+
     color: #8e44ad;
+
     font-weight: bold;
 }
 
 .emi {
+
     color: green;
+
     font-weight: bold;
 }
 
 .outstanding {
+
     color: red;
+
     font-weight: bold;
 }
 
 .btn {
+
     display: inline-block;
+
     padding: 8px 12px;
+
     background: #667eea;
+
     color: white;
+
     text-decoration: none;
+
     border-radius: 6px;
+
     margin: 3px;
 }
 
 .delete {
+
     background: #e74c3c;
 }
 
@@ -1946,7 +3501,9 @@ body {
 
 <div class="container">
 
-<h1>🏦 Loan History</h1>
+<h1>
+🏦 Loan History
+</h1>
 
 <a class="btn"
 href="/dashboard">
@@ -1964,12 +3521,19 @@ href="/add_loan">
 
 <hr>
 
-
 {% for l in loans %}
 
-{% set loan_amount = l["amount"]|float %}
-{% set emi_paid = l["emi_paid"]|float %}
-{% set outstanding = loan_amount - emi_paid %}
+{% set loan_amount =
+l["amount"]|float
+%}
+
+{% set emi_paid =
+l["emi_paid"]|float
+%}
+
+{% set outstanding =
+loan_amount - emi_paid
+%}
 
 <div class="card">
 
@@ -1993,7 +3557,9 @@ href="/add_loan">
 
 <p class="outstanding">
 📌 Outstanding:
-₹{{ "%.2f"|format(outstanding if outstanding > 0 else 0) }}
+₹{{ "%.2f"|format(
+outstanding if outstanding > 0 else 0
+) }}
 </p>
 
 <p>
@@ -2002,12 +3568,14 @@ href="/add_loan">
 
 {% if user["role"] == "admin" %}
 
-<a class="btn"
+<a
+class="btn"
 href="/add_emi?loan_id={{ l["id"] }}">
 💳 Receive EMI
 </a>
 
-<a class="btn delete"
+<a
+class="btn delete"
 href="/delete_loan/{{ l["id"] }}"
 onclick="return confirm('Delete this loan? All EMI records will also be deleted.')">
 🗑 Delete
@@ -2038,7 +3606,9 @@ onclick="return confirm('Delete this loan? All EMI records will also be deleted.
 # DELETE LOAN
 # =========================================================
 
-@app.route("/delete_loan/<int:id>")
+@app.route(
+    "/delete_loan/<int:id>"
+)
 def delete_loan(id):
 
     if not is_admin():
@@ -2051,8 +3621,11 @@ def delete_loan(id):
 
     cur.execute("""
         DELETE FROM fsc_loans
+
         WHERE id = %s
-    """, (id,))
+    """, (
+        id,
+    ))
 
     conn.commit()
 
@@ -2068,7 +3641,10 @@ def delete_loan(id):
 # ADD EMI
 # =========================================================
 
-@app.route("/add_emi", methods=["GET", "POST"])
+@app.route(
+    "/add_emi",
+    methods=["GET", "POST"]
+)
 def add_emi():
 
     if not is_admin():
@@ -2090,7 +3666,9 @@ def add_emi():
             COALESCE(
                 (
                     SELECT SUM(e.amount)
+
                     FROM fsc_loan_emi e
+
                     WHERE e.loan_id = l.id
                 ),
                 0
@@ -2113,16 +3691,33 @@ def add_emi():
 
     if request.method == "POST":
 
-        loan_id = request.form.get("loan_id")
-        amount = request.form.get("amount")
-        emi_date = request.form.get("emi_date")
-        note = request.form.get("note")
+        loan_id = request.form.get(
+            "loan_id"
+        )
+
+        amount = request.form.get(
+            "amount"
+        )
+
+        emi_date = request.form.get(
+            "emi_date"
+        )
+
+        note = request.form.get(
+            "note"
+        )
 
         cur.execute("""
-            SELECT member_id
+            SELECT
+                member_id,
+                amount
+
             FROM fsc_loans
+
             WHERE id = %s
-        """, (loan_id,))
+        """, (
+            loan_id,
+        ))
 
         loan = cur.fetchone()
 
@@ -2134,6 +3729,67 @@ def add_emi():
             return "Loan not found"
 
         cur.execute("""
+            SELECT
+                COALESCE(
+                    SUM(amount),
+                    0
+                ) AS paid
+
+            FROM fsc_loan_emi
+
+            WHERE loan_id = %s
+        """, (
+            loan_id,
+        ))
+
+        paid = float(
+            cur.fetchone()["paid"]
+        )
+
+        loan_amount = float(
+            loan["amount"]
+        )
+
+        emi_amount = float(
+            amount
+        )
+
+        remaining = (
+            loan_amount - paid
+        )
+
+        if emi_amount <= 0:
+
+            cur.close()
+            conn.close()
+
+            return """
+            <h2>
+            EMI amount must be greater than 0.
+            </h2>
+
+            <a href="/add_emi">
+            Back
+            </a>
+            """
+
+        if emi_amount > remaining:
+
+            cur.close()
+            conn.close()
+
+            return """
+            <h2>
+            EMI cannot be greater than
+            outstanding loan.
+            </h2>
+
+            <a href="/add_emi">
+            Back
+            </a>
+            """
+
+        cur.execute("""
             INSERT INTO fsc_loan_emi
             (
                 loan_id,
@@ -2143,7 +3799,14 @@ def add_emi():
                 note
             )
 
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES
+            (
+                %s,
+                %s,
+                %s,
+                %s,
+                %s
+            )
         """, (
             loan_id,
             loan["member_id"],
@@ -2180,32 +3843,50 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .box {
+
     width: 94%;
+
     max-width: 500px;
+
     margin: 30px auto;
+
     background: white;
+
     padding: 25px;
+
     border-radius: 14px;
 }
 
 select, input, textarea {
+
     width: 100%;
+
     padding: 12px;
+
     margin: 8px 0;
+
     box-sizing: border-box;
 }
 
 button {
+
     width: 100%;
+
     padding: 12px;
+
     background: #667eea;
+
     color: white;
+
     border: none;
+
     border-radius: 8px;
 }
 
@@ -2217,15 +3898,16 @@ button {
 
 <div class="box">
 
-<h1>💳 Receive Loan EMI</h1>
+<h1>
+💳 Receive Loan EMI
+</h1>
 
 <form method="POST">
 
-<label>
-Select Loan
-</label>
-
-<select name="loan_id" required>
+<select
+name="loan_id"
+required
+>
 
 <option value="">
 Select Loan
@@ -2234,7 +3916,8 @@ Select Loan
 {% for l in loans %}
 
 {% set outstanding =
-(l["amount"]|float) -
+(l["amount"]|float)
+-
 (l["emi_paid"]|float)
 %}
 
@@ -2242,16 +3925,25 @@ Select Loan
 
 <option
 value="{{ l["id"] }}"
-{% if selected_loan_id and selected_loan_id|string == l["id"]|string %}
+{% if selected_loan_id
+and selected_loan_id|string
+==
+l["id"]|string %}
 selected
 {% endif %}
 >
 
 {{ l["name"] }}
+
 -
-Loan ₹{{ "%.2f"|format(l["amount"]|float) }}
+Loan ₹{{ "%.2f"|format(
+l["amount"]|float
+) }}
+
 -
-Remaining ₹{{ "%.2f"|format(outstanding) }}
+Remaining ₹{{ "%.2f"|format(
+outstanding
+) }}
 
 </option>
 
@@ -2261,7 +3953,6 @@ Remaining ₹{{ "%.2f"|format(outstanding) }}
 
 </select>
 
-
 <input
 type="number"
 step="0.01"
@@ -2270,7 +3961,6 @@ placeholder="EMI Amount"
 required
 >
 
-
 <input
 type="date"
 name="emi_date"
@@ -2278,12 +3968,10 @@ value="{{ today }}"
 required
 >
 
-
 <textarea
 name="note"
 placeholder="EMI Note"
 ></textarea>
-
 
 <button>
 Save EMI
@@ -2309,9 +3997,7 @@ Save EMI
         html,
         loans=loans,
         selected_loan_id=selected_loan_id,
-        today=datetime.now().strftime(
-            "%Y-%m-%d"
-        )
+        today=today_india()
     )
 
 
@@ -2368,38 +4054,58 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .container {
+
     width: 94%;
+
     max-width: 1000px;
+
     margin: 20px auto;
 }
 
 .card {
+
     background: white;
+
     padding: 16px;
+
     margin-bottom: 10px;
+
     border-radius: 10px;
 }
 
 .green {
+
     color: green;
+
     font-weight: bold;
 }
 
 .btn {
+
     display: inline-block;
+
     padding: 8px 12px;
+
     background: #667eea;
+
     color: white;
+
     text-decoration: none;
+
     border-radius: 6px;
+
+    margin: 3px;
 }
 
 .delete {
+
     background: #e74c3c;
 }
 
@@ -2411,7 +4117,9 @@ body {
 
 <div class="container">
 
-<h1>💳 EMI History</h1>
+<h1>
+💳 EMI History
+</h1>
 
 <a class="btn"
 href="/dashboard">
@@ -2443,7 +4151,9 @@ href="/add_emi">
 
 <p class="green">
 💳 EMI Received:
-₹{{ "%.2f"|format(e["amount"]|float) }}
+₹{{ "%.2f"|format(
+e["amount"]|float
+) }}
 </p>
 
 <p>
@@ -2452,7 +4162,8 @@ href="/add_emi">
 
 {% if user["role"] == "admin" %}
 
-<a class="btn delete"
+<a
+class="btn delete"
 href="/delete_emi/{{ e["id"] }}"
 onclick="return confirm('Delete this EMI?')">
 🗑 Delete
@@ -2483,7 +4194,9 @@ onclick="return confirm('Delete this EMI?')">
 # DELETE EMI
 # =========================================================
 
-@app.route("/delete_emi/<int:id>")
+@app.route(
+    "/delete_emi/<int:id>"
+)
 def delete_emi(id):
 
     if not is_admin():
@@ -2496,8 +4209,11 @@ def delete_emi(id):
 
     cur.execute("""
         DELETE FROM fsc_loan_emi
+
         WHERE id = %s
-    """, (id,))
+    """, (
+        id,
+    ))
 
     conn.commit()
 
@@ -2534,8 +4250,11 @@ def member_summary():
             COALESCE(
                 (
                     SELECT SUM(t.amount)
+
                     FROM fsc_transactions t
+
                     WHERE t.member_id = m.id
+
                     AND t.transaction_type = 'jama'
                 ),
                 0
@@ -2544,7 +4263,9 @@ def member_summary():
             COALESCE(
                 (
                     SELECT SUM(l.amount)
+
                     FROM fsc_loans l
+
                     WHERE l.member_id = m.id
                 ),
                 0
@@ -2553,7 +4274,9 @@ def member_summary():
             COALESCE(
                 (
                     SELECT SUM(e.amount)
+
                     FROM fsc_loan_emi e
+
                     WHERE e.member_id = m.id
                 ),
                 0
@@ -2574,7 +4297,9 @@ def member_summary():
     for r in rows:
 
         jama = float(r["jama"])
+
         loan = float(r["loan"])
+
         emi = float(r["emi"])
 
         outstanding = max(
@@ -2583,6 +4308,7 @@ def member_summary():
         )
 
         summary.append({
+            "id": r["id"],
             "name": r["name"],
             "jama": jama,
             "loan": loan,
@@ -2606,53 +4332,81 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .container {
+
     width: 98%;
+
     max-width: 1200px;
+
     margin: 20px auto;
 }
 
 table {
+
     width: 100%;
+
     border-collapse: collapse;
+
     background: white;
 }
 
 th, td {
+
     padding: 12px;
+
     border: 1px solid #ddd;
+
     text-align: center;
 }
 
 th {
+
     background: #667eea;
+
     color: white;
 }
 
 .loan {
+
     color: #8e44ad;
 }
 
 .emi {
+
     color: green;
 }
 
 .outstanding {
+
     color: red;
+
     font-weight: bold;
 }
 
 .btn {
+
     display: inline-block;
+
     padding: 9px 13px;
+
     background: #555;
+
     color: white;
+
     text-decoration: none;
+
     border-radius: 7px;
+}
+
+.detail {
+
+    background: #16a085;
 }
 
 </style>
@@ -2667,7 +4421,8 @@ th {
 📊 Member-wise Summary
 </h1>
 
-<a class="btn"
+<a
+class="btn"
 href="/dashboard">
 ⬅ Dashboard
 </a>
@@ -2700,6 +4455,10 @@ EMI Received
 Outstanding Loan
 </th>
 
+<th>
+Details
+</th>
+
 </tr>
 
 {% for r in summary %}
@@ -2726,6 +4485,16 @@ Outstanding Loan
 ₹{{ "%.2f"|format(r["outstanding"]) }}
 </td>
 
+<td>
+
+<a
+class="btn detail"
+href="/member_detail/{{ r["id"] }}">
+View
+</a>
+
+</td>
+
 </tr>
 
 {% endfor %}
@@ -2745,6 +4514,1237 @@ Outstanding Loan
     return render_template_string(
         html,
         summary=summary
+    )
+
+
+# =========================================================
+# MONTHLY DUE ADMIN
+# =========================================================
+
+@app.route(
+    "/monthly_due",
+    methods=["GET", "POST"]
+)
+def monthly_due():
+
+    if not is_admin():
+        return redirect(
+            url_for("dashboard")
+        )
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            id,
+            name
+
+        FROM fsc_members
+
+        ORDER BY name
+    """)
+
+    members = cur.fetchall()
+
+    if request.method == "POST":
+
+        member_id = request.form.get(
+            "member_id"
+        )
+
+        due_month_raw = request.form.get(
+            "due_month"
+        )
+
+        saving_amount = request.form.get(
+            "saving_amount"
+        ) or 0
+
+        emi_amount = request.form.get(
+            "emi_amount"
+        ) or 0
+
+        note = request.form.get(
+            "note"
+        )
+
+        if not due_month_raw:
+
+            cur.close()
+            conn.close()
+
+            return "Month is required"
+
+        # HTML month input:
+        # 2026-10
+        #
+        # PostgreSQL DATE:
+        # 2026-10-01
+
+        due_month = (
+            due_month_raw + "-01"
+        )
+
+        cur.execute("""
+            INSERT INTO fsc_monthly_due
+            (
+                member_id,
+                due_month,
+                saving_amount,
+                emi_amount,
+                note
+            )
+
+            VALUES
+            (
+                %s,
+                %s,
+                %s,
+                %s,
+                %s
+            )
+
+            ON CONFLICT
+            (
+                member_id,
+                due_month
+            )
+
+            DO UPDATE SET
+
+                saving_amount =
+                    EXCLUDED.saving_amount,
+
+                emi_amount =
+                    EXCLUDED.emi_amount,
+
+                note =
+                    EXCLUDED.note
+        """, (
+            member_id,
+            due_month,
+            saving_amount,
+            emi_amount,
+            note
+        ))
+
+        conn.commit()
+
+        cur.close()
+        conn.close()
+
+        return redirect(
+            url_for("monthly_due")
+        )
+
+    # =====================================================
+    # EXISTING DUES
+    # =====================================================
+
+    cur.execute("""
+        SELECT
+            d.*,
+            m.name
+
+        FROM fsc_monthly_due d
+
+        JOIN fsc_members m
+        ON d.member_id = m.id
+
+        ORDER BY
+            d.due_month DESC,
+            m.name
+    """)
+
+    dues = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    html = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Monthly Due</title>
+
+<style>
+
+body {
+
+    font-family: Arial;
+
+    background: #f4f6f9;
+}
+
+.container {
+
+    width: 96%;
+
+    max-width: 1100px;
+
+    margin: 20px auto;
+}
+
+.box {
+
+    background: white;
+
+    padding: 20px;
+
+    border-radius: 14px;
+}
+
+input, select, textarea {
+
+    width: 100%;
+
+    padding: 11px;
+
+    margin: 7px 0;
+
+    box-sizing: border-box;
+}
+
+button {
+
+    width: 100%;
+
+    padding: 12px;
+
+    background: #667eea;
+
+    color: white;
+
+    border: none;
+
+    border-radius: 8px;
+}
+
+table {
+
+    width: 100%;
+
+    border-collapse: collapse;
+
+    background: white;
+
+    margin-top: 20px;
+}
+
+th, td {
+
+    padding: 10px;
+
+    border: 1px solid #ddd;
+
+    text-align: center;
+}
+
+th {
+
+    background: #667eea;
+
+    color: white;
+}
+
+.btn {
+
+    display: inline-block;
+
+    padding: 9px 13px;
+
+    background: #555;
+
+    color: white;
+
+    text-decoration: none;
+
+    border-radius: 7px;
+}
+
+.green {
+
+    color: green;
+
+    font-weight: bold;
+}
+
+.blue {
+
+    color: #2980b9;
+
+    font-weight: bold;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>
+📅 Monthly Due Amount
+</h1>
+
+<a
+class="btn"
+href="/dashboard">
+⬅ Dashboard
+</a>
+
+<br><br>
+
+<div class="box">
+
+<h2>
+Set / Update Monthly Due
+</h2>
+
+<p style="color:#666;">
+Each member can have a different saving
+and EMI amount for every month.
+</p>
+
+<form method="POST">
+
+<label>
+Member
+</label>
+
+<select
+name="member_id"
+required
+>
+
+<option value="">
+Select Member
+</option>
+
+{% for m in members %}
+
+<option value="{{ m["id"] }}">
+{{ m["name"] }}
+</option>
+
+{% endfor %}
+
+</select>
+
+<label>
+Month
+</label>
+
+<input
+type="month"
+name="due_month"
+required
+>
+
+<label>
+Monthly Saving Amount
+</label>
+
+<input
+type="number"
+step="0.01"
+min="0"
+name="saving_amount"
+placeholder="Example: 1500"
+value="0"
+>
+
+<label>
+EMI Due Amount
+</label>
+
+<input
+type="number"
+step="0.01"
+min="0"
+name="emi_amount"
+placeholder="Example: 2000"
+value="0"
+>
+
+<textarea
+name="note"
+placeholder="Note"
+></textarea>
+
+<button>
+💾 Save / Update Due
+</button>
+
+</form>
+
+</div>
+
+
+<h2>
+Saved Monthly Due
+</h2>
+
+<div style="overflow-x:auto;">
+
+<table>
+
+<tr>
+
+<th>
+Month
+</th>
+
+<th>
+Member
+</th>
+
+<th>
+Saving Due
+</th>
+
+<th>
+EMI Due
+</th>
+
+<th>
+Note
+</th>
+
+</tr>
+
+{% for d in dues %}
+
+<tr>
+
+<td>
+{{ d["due_month"].strftime("%B %Y") }}
+</td>
+
+<td>
+{{ d["name"] }}
+</td>
+
+<td class="green">
+₹{{ "%.2f"|format(
+d["saving_amount"]|float
+) }}
+</td>
+
+<td class="blue">
+₹{{ "%.2f"|format(
+d["emi_amount"]|float
+) }}
+</td>
+
+<td>
+{{ d["note"] or "-" }}
+</td>
+
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+</div>
+
+</body>
+
+</html>
+
+"""
+
+    return render_template_string(
+        html,
+        members=members,
+        dues=dues
+    )
+
+
+# =========================================================
+# DUE SUMMARY
+# =========================================================
+
+@app.route("/due_summary")
+def due_summary():
+
+    user = current_user()
+
+    if not user:
+        return redirect(
+            url_for("login")
+        )
+
+    month_raw = request.args.get(
+        "month"
+    )
+
+    if not month_raw:
+
+        month_raw = datetime.now(
+            IST
+        ).strftime("%Y-%m")
+
+    due_month = month_raw + "-01"
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            m.id,
+            m.name,
+
+            COALESCE(
+                d.saving_amount,
+                0
+            ) AS saving_due,
+
+            COALESCE(
+                d.emi_amount,
+                0
+            ) AS emi_due,
+
+            d.note
+
+        FROM fsc_members m
+
+        LEFT JOIN fsc_monthly_due d
+
+        ON d.member_id = m.id
+
+        AND d.due_month = %s
+
+        ORDER BY m.name
+    """, (
+        due_month,
+    ))
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    total_saving_due = 0
+
+    total_emi_due = 0
+
+    for r in rows:
+
+        total_saving_due += float(
+            r["saving_due"]
+        )
+
+        total_emi_due += float(
+            r["emi_due"]
+        )
+
+    html = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Due Summary</title>
+
+<style>
+
+body {
+
+    font-family: Arial;
+
+    background: #f4f6f9;
+}
+
+.container {
+
+    width: 98%;
+
+    max-width: 1200px;
+
+    margin: 20px auto;
+}
+
+.filter {
+
+    background: white;
+
+    padding: 18px;
+
+    border-radius: 12px;
+}
+
+input {
+
+    padding: 10px;
+}
+
+button {
+
+    padding: 10px 15px;
+
+    background: #667eea;
+
+    color: white;
+
+    border: none;
+
+    border-radius: 7px;
+}
+
+.cards {
+
+    display: grid;
+
+    grid-template-columns:
+    repeat(
+        auto-fit,
+        minmax(180px,1fr)
+    );
+
+    gap: 12px;
+
+    margin-top: 15px;
+}
+
+.card {
+
+    background: white;
+
+    padding: 18px;
+
+    border-radius: 12px;
+}
+
+.amount {
+
+    font-size: 22px;
+
+    font-weight: bold;
+}
+
+table {
+
+    width: 100%;
+
+    border-collapse: collapse;
+
+    background: white;
+
+    margin-top: 20px;
+}
+
+th, td {
+
+    padding: 12px;
+
+    border: 1px solid #ddd;
+
+    text-align: center;
+}
+
+th {
+
+    background: #667eea;
+
+    color: white;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>
+📌 Monthly Due Summary
+</h1>
+
+<a href="/dashboard">
+⬅ Dashboard
+</a>
+
+<br><br>
+
+<div class="filter">
+
+<form method="GET">
+
+<label>
+Select Month:
+</label>
+
+<input
+type="month"
+name="month"
+value="{{ month_raw }}"
+required
+>
+
+<button>
+🔍 View Due
+</button>
+
+</form>
+
+</div>
+
+
+<div class="cards">
+
+<div class="card">
+
+<h3>
+💵 Total Saving Due
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(
+total_saving_due
+) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+💳 Total EMI Due
+</h3>
+
+<div class="amount">
+₹{{ "%.2f"|format(
+total_emi_due
+) }}
+</div>
+
+</div>
+
+</div>
+
+
+<h2>
+Member-wise Due
+</h2>
+
+<div style="overflow-x:auto;">
+
+<table>
+
+<tr>
+
+<th>
+Member
+</th>
+
+<th>
+Saving Due
+</th>
+
+<th>
+EMI Due
+</th>
+
+<th>
+Total Due
+</th>
+
+<th>
+Note
+</th>
+
+</tr>
+
+{% for r in rows %}
+
+{% set saving =
+r["saving_due"]|float
+%}
+
+{% set emi =
+r["emi_due"]|float
+%}
+
+<tr>
+
+<td>
+{{ r["name"] }}
+</td>
+
+<td>
+₹{{ "%.2f"|format(saving) }}
+</td>
+
+<td>
+₹{{ "%.2f"|format(emi) }}
+</td>
+
+<td>
+<strong>
+₹{{ "%.2f"|format(
+saving + emi
+) }}
+</strong>
+</td>
+
+<td>
+{{ r["note"] or "-" }}
+</td>
+
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+
+</div>
+
+</body>
+
+</html>
+
+"""
+
+    return render_template_string(
+        html,
+        rows=rows,
+        month_raw=month_raw,
+        total_saving_due=total_saving_due,
+        total_emi_due=total_emi_due
+    )
+
+
+# =========================================================
+# MONTHLY DASHBOARD
+# =========================================================
+
+@app.route("/monthly_dashboard")
+def monthly_dashboard():
+
+    user = current_user()
+
+    if not user:
+        return redirect(
+            url_for("login")
+        )
+
+    month_raw = request.args.get(
+        "month"
+    )
+
+    if not month_raw:
+
+        month_raw = datetime.now(
+            IST
+        ).strftime("%Y-%m")
+
+    start_date = (
+        month_raw + "-01"
+    )
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    # =====================================================
+    # SAVING
+    # =====================================================
+
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS amount
+
+        FROM fsc_transactions
+
+        WHERE transaction_type = 'jama'
+
+        AND DATE_TRUNC(
+            'month',
+            transaction_date
+        )
+        =
+        DATE_TRUNC(
+            'month',
+            %s::date
+        )
+    """, (
+        start_date,
+    ))
+
+    saving = float(
+        cur.fetchone()["amount"]
+    )
+
+    # =====================================================
+    # LOAN
+    # =====================================================
+
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS amount
+
+        FROM fsc_loans
+
+        WHERE DATE_TRUNC(
+            'month',
+            loan_date
+        )
+        =
+        DATE_TRUNC(
+            'month',
+            %s::date
+        )
+    """, (
+        start_date,
+    ))
+
+    loan = float(
+        cur.fetchone()["amount"]
+    )
+
+    # =====================================================
+    # EMI
+    # =====================================================
+
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(amount),
+                0
+            ) AS amount
+
+        FROM fsc_loan_emi
+
+        WHERE DATE_TRUNC(
+            'month',
+            emi_date
+        )
+        =
+        DATE_TRUNC(
+            'month',
+            %s::date
+        )
+    """, (
+        start_date,
+    ))
+
+    emi = float(
+        cur.fetchone()["amount"]
+    )
+
+    # =====================================================
+    # DUE
+    # =====================================================
+
+    cur.execute("""
+        SELECT
+            COALESCE(
+                SUM(saving_amount),
+                0
+            ) AS saving_due,
+
+            COALESCE(
+                SUM(emi_amount),
+                0
+            ) AS emi_due
+
+        FROM fsc_monthly_due
+
+        WHERE due_month = %s
+    """, (
+        start_date,
+    ))
+
+    due = cur.fetchone()
+
+    saving_due = float(
+        due["saving_due"]
+    )
+
+    emi_due = float(
+        due["emi_due"]
+    )
+
+    cur.close()
+    conn.close()
+
+    html = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1">
+
+<title>Monthly Dashboard</title>
+
+<style>
+
+body {
+
+    font-family: Arial;
+
+    background: #f4f6f9;
+}
+
+.container {
+
+    width: 94%;
+
+    max-width: 1100px;
+
+    margin: 20px auto;
+}
+
+.filter {
+
+    background: white;
+
+    padding: 18px;
+
+    border-radius: 12px;
+}
+
+input {
+
+    padding: 10px;
+}
+
+button {
+
+    padding: 10px 15px;
+
+    background: #667eea;
+
+    color: white;
+
+    border: none;
+
+    border-radius: 7px;
+}
+
+.cards {
+
+    display: grid;
+
+    grid-template-columns:
+    repeat(
+        auto-fit,
+        minmax(190px,1fr)
+    );
+
+    gap: 15px;
+
+    margin-top: 20px;
+}
+
+.card {
+
+    background: white;
+
+    padding: 20px;
+
+    border-radius: 14px;
+
+    box-shadow:
+    0 4px 10px
+    rgba(0,0,0,0.08);
+}
+
+.amount {
+
+    font-size: 25px;
+
+    font-weight: bold;
+}
+
+.green {
+
+    color: green;
+}
+
+.purple {
+
+    color: #8e44ad;
+}
+
+.blue {
+
+    color: #2980b9;
+}
+
+.red {
+
+    color: red;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>
+📈 Monthly Dashboard
+</h1>
+
+<a href="/dashboard">
+⬅ Dashboard
+</a>
+
+<br><br>
+
+<div class="filter">
+
+<form method="GET">
+
+<input
+type="month"
+name="month"
+value="{{ month_raw }}"
+required
+>
+
+<button>
+🔍 View Month
+</button>
+
+</form>
+
+</div>
+
+
+<div class="cards">
+
+<div class="card">
+
+<h3>
+💵 Saving Collected
+</h3>
+
+<div class="amount green">
+₹{{ "%.2f"|format(saving) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+🏦 Loan Given
+</h3>
+
+<div class="amount purple">
+₹{{ "%.2f"|format(loan) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+💳 EMI Received
+</h3>
+
+<div class="amount green">
+₹{{ "%.2f"|format(emi) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+📅 Saving Due
+</h3>
+
+<div class="amount blue">
+₹{{ "%.2f"|format(saving_due) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+📅 EMI Due
+</h3>
+
+<div class="amount blue">
+₹{{ "%.2f"|format(emi_due) }}
+</div>
+
+</div>
+
+
+<div class="card">
+
+<h3>
+📌 Total Due
+</h3>
+
+<div class="amount red">
+₹{{ "%.2f"|format(
+saving_due + emi_due
+) }}
+</div>
+
+</div>
+
+</div>
+
+</div>
+
+</body>
+
+</html>
+
+"""
+
+    return render_template_string(
+        html,
+        month_raw=month_raw,
+        saving=saving,
+        loan=loan,
+        emi=emi,
+        saving_due=saving_due,
+        emi_due=emi_due
     )
 
 
@@ -2783,9 +5783,11 @@ def report():
                 COALESCE(
                     (
                         SELECT SUM(t.amount)
+
                         FROM fsc_transactions t
 
                         WHERE t.member_id = m.id
+
                         AND t.transaction_type = 'jama'
 
                         AND t.transaction_date
@@ -2797,6 +5799,7 @@ def report():
                 COALESCE(
                     (
                         SELECT SUM(l.amount)
+
                         FROM fsc_loans l
 
                         WHERE l.member_id = m.id
@@ -2810,6 +5813,7 @@ def report():
                 COALESCE(
                     (
                         SELECT SUM(e.amount)
+
                         FROM fsc_loan_emi e
 
                         WHERE e.member_id = m.id
@@ -2842,9 +5846,11 @@ def report():
                 COALESCE(
                     (
                         SELECT SUM(t.amount)
+
                         FROM fsc_transactions t
 
                         WHERE t.member_id = m.id
+
                         AND t.transaction_type = 'jama'
                     ),
                     0
@@ -2853,6 +5859,7 @@ def report():
                 COALESCE(
                     (
                         SELECT SUM(l.amount)
+
                         FROM fsc_loans l
 
                         WHERE l.member_id = m.id
@@ -2863,6 +5870,7 @@ def report():
                 COALESCE(
                     (
                         SELECT SUM(e.amount)
+
                         FROM fsc_loan_emi e
 
                         WHERE e.member_id = m.id
@@ -2889,7 +5897,9 @@ def report():
     for r in rows:
 
         jama = float(r["jama"])
+
         loan = float(r["loan"])
+
         emi = float(r["emi"])
 
         outstanding = max(
@@ -2898,10 +5908,13 @@ def report():
         )
 
         total_jama += jama
+
         total_loan += loan
+
         total_emi += emi
 
         data.append({
+            "id": r["id"],
             "name": r["name"],
             "jama": jama,
             "loan": loan,
@@ -2936,91 +5949,137 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .container {
+
     width: 98%;
+
     max-width: 1200px;
+
     margin: 20px auto;
 }
 
 .filter {
+
     background: white;
+
     padding: 18px;
+
     border-radius: 12px;
 }
 
 input {
+
     padding: 10px;
+
     margin: 5px;
 }
 
 button {
+
     padding: 10px 15px;
+
     background: #667eea;
+
     color: white;
+
     border: none;
+
     border-radius: 7px;
 }
 
 .cards {
+
     display: grid;
+
     grid-template-columns:
-    repeat(auto-fit,minmax(170px,1fr));
+    repeat(
+        auto-fit,
+        minmax(170px,1fr)
+    );
+
     gap: 12px;
+
     margin-top: 15px;
 }
 
 .card {
+
     background: white;
+
     padding: 18px;
+
     border-radius: 12px;
 }
 
 .amount {
+
     font-size: 22px;
+
     font-weight: bold;
 }
 
 table {
+
     width: 100%;
+
     border-collapse: collapse;
+
     background: white;
+
     margin-top: 20px;
 }
 
 th, td {
+
     padding: 12px;
+
     border: 1px solid #ddd;
+
     text-align: center;
 }
 
 th {
+
     background: #667eea;
+
     color: white;
 }
 
 .loan {
+
     color: #8e44ad;
 }
 
 .emi {
+
     color: green;
 }
 
 .outstanding {
+
     color: red;
+
     font-weight: bold;
 }
 
 .btn {
+
     display: inline-block;
+
     padding: 9px 13px;
+
     background: #555;
+
     color: white;
+
     text-decoration: none;
+
     border-radius: 7px;
 }
 
@@ -3041,8 +6100,12 @@ href="/dashboard">
 ⬅ Dashboard
 </a>
 
-<br><br>
+<a class="btn"
+href="/export_report?from_date={{ from_date or '' }}&to_date={{ to_date or '' }}">
+⬇ Download CSV
+</a>
 
+<br><br>
 
 <div class="filter">
 
@@ -3127,7 +6190,9 @@ required
 </h3>
 
 <div class="amount">
-₹{{ "%.2f"|format(total_outstanding) }}
+₹{{ "%.2f"|format(
+total_outstanding
+) }}
 </div>
 
 </div>
@@ -3140,7 +6205,9 @@ required
 </h3>
 
 <div class="amount">
-₹{{ "%.2f"|format(total_amount) }}
+₹{{ "%.2f"|format(
+total_amount
+) }}
 </div>
 
 </div>
@@ -3151,7 +6218,6 @@ required
 <h2>
 Member-wise Report
 </h2>
-
 
 <div style="overflow-x:auto;">
 
@@ -3181,7 +6247,6 @@ Outstanding Loan
 
 </tr>
 
-
 {% for r in data %}
 
 <tr>
@@ -3203,7 +6268,9 @@ Outstanding Loan
 </td>
 
 <td class="outstanding">
-₹{{ "%.2f"|format(r["outstanding"]) }}
+₹{{ "%.2f"|format(
+r["outstanding"]
+) }}
 </td>
 
 </tr>
@@ -3236,6 +6303,197 @@ Outstanding Loan
 
 
 # =========================================================
+# EXPORT REPORT CSV
+# =========================================================
+
+@app.route("/export_report")
+def export_report():
+
+    user = current_user()
+
+    if not user:
+        return redirect(
+            url_for("login")
+        )
+
+    from_date = request.args.get(
+        "from_date"
+    )
+
+    to_date = request.args.get(
+        "to_date"
+    )
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    if from_date and to_date:
+
+        cur.execute("""
+            SELECT
+                m.name,
+
+                COALESCE(
+                    (
+                        SELECT SUM(t.amount)
+
+                        FROM fsc_transactions t
+
+                        WHERE t.member_id = m.id
+
+                        AND t.transaction_type = 'jama'
+
+                        AND t.transaction_date
+                        BETWEEN %s AND %s
+                    ),
+                    0
+                ) AS jama,
+
+                COALESCE(
+                    (
+                        SELECT SUM(l.amount)
+
+                        FROM fsc_loans l
+
+                        WHERE l.member_id = m.id
+
+                        AND l.loan_date
+                        BETWEEN %s AND %s
+                    ),
+                    0
+                ) AS loan,
+
+                COALESCE(
+                    (
+                        SELECT SUM(e.amount)
+
+                        FROM fsc_loan_emi e
+
+                        WHERE e.member_id = m.id
+
+                        AND e.emi_date
+                        BETWEEN %s AND %s
+                    ),
+                    0
+                ) AS emi
+
+            FROM fsc_members m
+
+            ORDER BY m.name
+        """, (
+            from_date,
+            to_date,
+            from_date,
+            to_date,
+            from_date,
+            to_date
+        ))
+
+    else:
+
+        cur.execute("""
+            SELECT
+                m.name,
+
+                COALESCE(
+                    (
+                        SELECT SUM(t.amount)
+
+                        FROM fsc_transactions t
+
+                        WHERE t.member_id = m.id
+
+                        AND t.transaction_type = 'jama'
+                    ),
+                    0
+                ) AS jama,
+
+                COALESCE(
+                    (
+                        SELECT SUM(l.amount)
+
+                        FROM fsc_loans l
+
+                        WHERE l.member_id = m.id
+                    ),
+                    0
+                ) AS loan,
+
+                COALESCE(
+                    (
+                        SELECT SUM(e.amount)
+
+                        FROM fsc_loan_emi e
+
+                        WHERE e.member_id = m.id
+                    ),
+                    0
+                ) AS emi
+
+            FROM fsc_members m
+
+            ORDER BY m.name
+        """)
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    output = io.StringIO()
+
+    writer = csv.writer(
+        output
+    )
+
+    writer.writerow([
+        "Member",
+        "Regular Jama",
+        "Loan Given",
+        "EMI Received",
+        "Outstanding Loan",
+        "Actual Balance"
+    ])
+
+    for r in rows:
+
+        jama = float(r["jama"])
+
+        loan = float(r["loan"])
+
+        emi = float(r["emi"])
+
+        outstanding = max(
+            loan - emi,
+            0
+        )
+
+        balance = (
+            jama
+            - loan
+            + emi
+        )
+
+        writer.writerow([
+            r["name"],
+            f"{jama:.2f}",
+            f"{loan:.2f}",
+            f"{emi:.2f}",
+            f"{outstanding:.2f}",
+            f"{balance:.2f}"
+        ])
+
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition":
+            "attachment; filename=friend_saving_report.csv"
+        }
+    )
+
+
+# =========================================================
 # CHANGE PASSWORD
 # =========================================================
 
@@ -3253,6 +6511,7 @@ def change_password():
         )
 
     message = None
+
     error = None
 
     if request.method == "POST":
@@ -3274,23 +6533,31 @@ def change_password():
             old_password
         ):
 
-            error = "Old password is incorrect."
+            error = (
+                "Old password is incorrect."
+            )
 
         elif new_password != confirm_password:
 
-            error = "New passwords do not match."
+            error = (
+                "New passwords do not match."
+            )
 
         elif len(new_password) < 4:
 
-            error = "Password must be at least 4 characters."
+            error = (
+                "Password must be at least 4 characters."
+            )
 
         else:
 
             conn = get_conn()
             cur = conn.cursor()
 
-            new_hash = generate_password_hash(
-                new_password
+            new_hash = (
+                generate_password_hash(
+                    new_password
+                )
             )
 
             cur.execute("""
@@ -3322,7 +6589,9 @@ def change_password():
             cur.close()
             conn.close()
 
-            message = "Password changed successfully."
+            message = (
+                "Password changed successfully."
+            )
 
     html = """
 
@@ -3340,40 +6609,60 @@ content="width=device-width, initial-scale=1">
 <style>
 
 body {
+
     font-family: Arial;
+
     background: #f4f6f9;
 }
 
 .box {
+
     width: 94%;
+
     max-width: 500px;
+
     margin: 40px auto;
+
     background: white;
+
     padding: 25px;
+
     border-radius: 14px;
 }
 
 input {
+
     width: 100%;
+
     padding: 12px;
+
     margin: 8px 0;
+
     box-sizing: border-box;
 }
 
 button {
+
     width: 100%;
+
     padding: 12px;
+
     background: #667eea;
+
     color: white;
+
     border: none;
+
     border-radius: 8px;
 }
 
 .success {
+
     color: green;
 }
 
 .error {
+
     color: red;
 }
 
@@ -3456,7 +6745,7 @@ Change Password
 
 
 # =========================================================
-# RUN
+# START
 # =========================================================
 
 init_db()
@@ -3466,11 +6755,13 @@ if __name__ == "__main__":
 
     app.run(
         host="0.0.0.0",
+
         port=int(
             os.environ.get(
                 "PORT",
                 5000
             )
         ),
+
         debug=True
     )
